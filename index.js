@@ -127,6 +127,20 @@ function createWriteToken() {
     return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function stableStringify(value) {
+    if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+    if (value && typeof value === "object") {
+        return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+}
+
+function libraryFingerprint(library) {
+    const collections = [...(library.collections || [])].sort((a, b) => a.key.localeCompare(b.key));
+    const items = [...(library.items || [])].sort((a, b) => a.key.localeCompare(b.key));
+    return stableStringify({ serverID: library.serverID, collections, items });
+}
+
 class ZoteroNotesPlugin extends Plugin {
     async onload() {
         this.abortController = new AbortController();
@@ -184,13 +198,65 @@ class ZoteroNotesPlugin extends Plugin {
 
     async onLayoutReady() {
         await this.rebuildBindings();
-        if (this.settings.autoImport) await this.refreshLibrary(false);
-        else this.render();
+        if (this.settings.autoImport) {
+            this.refreshLibrary(false).catch((error) => {
+                if (error.name !== "AbortError") this.renderStatus(errorMessage(error));
+            });
+        } else this.render();
+    }
+
+    async onDataChanged() {
+        const revision = (this.dataChangeRevision || 0) + 1;
+        this.dataChangeRevision = revision;
+        const [settings, cache, bindings, writeKeys] = await Promise.all([
+            this.loadData("settings.json"),
+            this.loadData("library-cache.json"),
+            this.loadData("bindings.json"),
+            this.loadData("zotero-write-keys.json")
+        ]);
+        if (revision !== this.dataChangeRevision) return;
+        this.settings = { ...DEFAULT_SETTINGS, ...(settings || {}) };
+        this.bindings = { ...this.bindings, ...(bindings && typeof bindings === "object" ? bindings : {}) };
+        this.writeKeys = writeKeys && typeof writeKeys === "object" ? writeKeys : {};
+        this.library = cache && Array.isArray(cache.items) && Array.isArray(cache.collections)
+            ? cache
+            : { serverID: "", collections: [], items: [], importedAt: 0 };
+        if (this.settingControls) {
+            this.settingControls.notebookSelect.value = this.settings.notebook;
+            this.settingControls.rootInput.value = this.settings.rootName;
+            this.settingControls.autoImport.checked = this.settings.autoImport;
+        }
+        this.render();
     }
 
     onunload() {
+        this.dataChangeRevision = (this.dataChangeRevision || 0) + 1;
         this.abortController.abort();
         this.dockElement = null;
+    }
+
+    async reloadBindingsFromStorage() {
+        const bindings = await this.loadData("bindings.json");
+        this.bindings = { ...this.bindings, ...(bindings && typeof bindings === "object" ? bindings : {}) };
+        this.render();
+    }
+
+    withExclusiveLock(name, operation) {
+        if (globalThis.navigator?.locks?.request) {
+            return globalThis.navigator.locks.request(name, {
+                mode: "exclusive",
+                signal: this.abortController.signal
+            }, operation);
+        }
+        return operation();
+    }
+
+    withOperationLock(itemKey, operation) {
+        return this.withExclusiveLock(`${PLUGIN_NAME}:item:${itemKey}`, operation);
+    }
+
+    withBindingsLock(operation) {
+        return this.withExclusiveLock(`${PLUGIN_NAME}:bindings`, operation);
     }
 
     t(key) {
@@ -281,7 +347,6 @@ class ZoteroNotesPlugin extends Plugin {
         try {
             const probe = await this.zoteroPage(`${USER_PREFIX}/items?limit=1`);
             if (!probe.serverID) throw new Error("Zotero 10+ is required; Zotero-Server-ID is missing.");
-            this.library.serverID = probe.serverID;
             const [collections, allItems] = await Promise.all([
                 this.fetchAll(`${USER_PREFIX}/collections`),
                 this.fetchAll(`${USER_PREFIX}/items`)
@@ -292,20 +357,32 @@ class ZoteroNotesPlugin extends Plugin {
                 stale: false
             }));
             items.sort((a, b) => itemTitle(a).localeCompare(itemTitle(b), undefined, { sensitivity: "base" }));
-            this.library = {
-                serverID: probe.serverID,
-                collections,
-                items,
-                importedAt: Date.now()
-            };
+            const nextLibrary = { serverID: probe.serverID, collections, items, importedAt: this.library.importedAt || 0 };
+            const nextBindings = Object.fromEntries(Object.entries(this.bindings).map(([key, binding]) => [key, { ...binding }]));
             const knownKeys = new Set(items.map((item) => item.key));
-            Object.values(this.bindings).forEach((binding) => {
+            Object.values(nextBindings).forEach((binding) => {
                 if (binding.serverID === probe.serverID) binding.stale = !knownKeys.has(binding.itemKey);
             });
-            await Promise.all([
-                this.saveData("library-cache.json", this.library),
-                this.saveData("bindings.json", this.bindings)
-            ]);
+            const changed = libraryFingerprint(nextLibrary) !== libraryFingerprint(this.library)
+                || stableStringify(nextBindings) !== stableStringify(this.bindings);
+            if (changed) {
+                nextLibrary.importedAt = items.reduce((latest, item) => {
+                    const modified = Date.parse(item.data?.dateModified || "");
+                    return Number.isFinite(modified) ? Math.max(latest, modified) : latest;
+                }, this.library.importedAt || 0);
+            }
+            this.library = nextLibrary;
+            this.bindings = nextBindings;
+            if (changed) {
+                await this.withBindingsLock(async () => {
+                    const stored = await this.loadData("bindings.json");
+                    this.bindings = { ...this.bindings, ...(stored && typeof stored === "object" ? stored : {}) };
+                    await Promise.all([
+                        this.saveData("library-cache.json", this.library),
+                        this.saveData("bindings.json", this.bindings)
+                    ]);
+                });
+            }
             this.render();
             if (notify) showMessage(`${this.t("importSuccess")}: ${items.length}`);
         } catch (error) {
@@ -327,6 +404,7 @@ class ZoteroNotesPlugin extends Plugin {
         const autoImport = document.createElement("input");
         autoImport.type = "checkbox";
         autoImport.checked = this.settings.autoImport;
+        this.settingControls = { notebookSelect, rootInput, autoImport };
         const save = async () => {
             this.settings = {
                 notebook: notebookSelect.value,
@@ -571,7 +649,6 @@ class ZoteroNotesPlugin extends Plugin {
             const key = this.bindingKey(binding.itemKey, binding.serverID);
             this.bindings[key] = { ...this.bindings[key], ...binding };
         });
-        await this.saveData("bindings.json", this.bindings);
         this.render();
     }
 
@@ -590,6 +667,11 @@ class ZoteroNotesPlugin extends Plugin {
     }
 
     async createOrOpen(item) {
+        return this.withOperationLock(item.key, () => this.createOrOpenExclusive(item));
+    }
+
+    async createOrOpenExclusive(item) {
+        await this.reloadBindingsFromStorage();
         const existing = this.bindings[this.bindingKey(item.key)];
         if (existing?.parentDocId && existing?.noteDocId) {
             await openTab({ app: this.app, doc: { id: existing.parentDocId } });
@@ -649,18 +731,25 @@ class ZoteroNotesPlugin extends Plugin {
     }
 
     async saveBinding(binding) {
-        this.bindings[this.bindingKey(binding.itemKey, binding.serverID)] = binding;
-        await this.request("/api/attr/setBlockAttrs", {
-            id: binding.parentDocId,
-            attrs: {
-                [ATTR_SERVER]: binding.serverID,
-                [ATTR_ITEM]: binding.itemKey,
-                [ATTR_NOTE_DOC]: binding.noteDocId,
-                [ATTR_NOTE_KEY]: binding.noteKey || ""
-            }
+        return this.withBindingsLock(async () => {
+            const stored = await this.loadData("bindings.json");
+            this.bindings = {
+                ...this.bindings,
+                ...(stored && typeof stored === "object" ? stored : {}),
+                [this.bindingKey(binding.itemKey, binding.serverID)]: binding
+            };
+            await this.request("/api/attr/setBlockAttrs", {
+                id: binding.parentDocId,
+                attrs: {
+                    [ATTR_SERVER]: binding.serverID,
+                    [ATTR_ITEM]: binding.itemKey,
+                    [ATTR_NOTE_DOC]: binding.noteDocId,
+                    [ATTR_NOTE_KEY]: binding.noteKey || ""
+                }
+            });
+            await this.saveData("bindings.json", this.bindings);
+            this.render();
         });
-        await this.saveData("bindings.json", this.bindings);
-        this.render();
     }
 
     async metadataMarkdown(item, noteDocId) {

@@ -78,6 +78,10 @@ Zotero 原生笔记是富文本 HTML；预览中的 Markdown 是交换格式，�
 
 发布包根层包含 `plugin.json`、`index.js`、`index.css`、`i18n/`、中英文 README、`icon.png`、`preview.png` 和 `LICENSE`。
 
+### 自动化检查
+
+使用 Node.js 22 或更高版本运行 `npm test` 检查生命周期与多窗口回归场景，或运行 `npm run check` 同时检查语法和测试。覆盖启动写入、无变化缓存、`onDataChanged`、后台导入、跨窗口绑定合并和源站级文档创建锁。开发测试文件不会打入 `package.zip`。
+
 ## 反馈
 
 请通过 [GitHub Issues](https://github.com/bnoij/siyuan-plugin-zotero-notes/issues) 提交问题和建议，并附上思源与 Zotero 版本、复现步骤、预期结果和实际结果。请勿提交私人文库数据、API Key 或授权令牌。

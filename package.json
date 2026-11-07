@@ -1,0 +1,13 @@
+{
+  "name": "siyuan-plugin-zotero-notes",
+  "version": "0.1.2",
+  "private": true,
+  "description": "Development checks for the SiYuan Zotero Notes plugin",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\"",
+    "check": "node --check index.js && node --test \"tests/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
