@@ -78,6 +78,16 @@ Zotero 原生笔记是富文本 HTML；预览中的 Markdown 是交换格式，�
 
 即使已有上述保护，内部测试期间仍请保持独立备份。
 
+## Kimi 研究工作流导入（0.2.0）
+
+插件提供两个通用导入操作：`ensure_papers` 确保 Zotero 条目、论文页、`Note` 与绑定存在；`write_documents` 原样写入调用方提供的 Markdown。论文推荐、候选去重、日报/精读内容和冲突处理策略由 Kimi Work 决定，插件不生成日报，也不擅自覆盖冲突文档。
+
+Kimi Work 通过 `/api/file/putFile` 把任务写入插件私有目录 `data/storage/petal/siyuan-plugin-zotero-notes/jobs/pending/`。插件每 2 秒领取任务，经 `processing/` 写入 `completed/` 或 `failed/`。在设置中可关闭“Kimi 研究导入队列”。该目录只保存任务与结果，不包含 Zotero 写入密钥。
+
+`write_documents` 使用 `expectedHash` 作为写入前提：当前文档哈希不一致时返回 `conflict`，只有调用方明确设置 `onConflict: "overwrite"` 才覆盖。`custom-research-content-hash` 记录最近一次导入后的规范化内容哈希；原有 `custom-zotero-server-id`、`custom-zotero-item-key`、`custom-zotero-note-doc-id`、`custom-zotero-note-key` 继续负责文献绑定和 Note 回传。
+
+后台导入复用 `createOrOpenExclusive({openTab:false})`，因此创建的 `Zotero/论文题名/Note` 与手工点击“新建笔记”完全同构。AI 精读写入 Note 后，仍可使用本插件的预览、回传和自动回传能力。
+
 ## 开发
 
 本项目直接交付可加载的 CommonJS `index.js`，无 npm 依赖、无需构建。运行文件位于仓库根目录。

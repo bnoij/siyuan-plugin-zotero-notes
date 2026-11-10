@@ -19,6 +19,8 @@
   "noteSyncIntervalTip": "每隔多少分钟自动把内容有变化的 Note 回传到 Zotero；0 表示关闭。",
   "syncMode": "文库同步方式",
   "syncModeTip": "增量同步先比对 Zotero 本地版本号，只拉取有变化的条目并识别删除，大幅减少刷新耗时；全量同步每次拉取整个文库。",
+  "workflowQueueEnabled": "Kimi 研究导入队列",
+  "workflowQueueEnabledTip": "允许 Kimi Work 通过插件私有任务目录导入文献与 AI 内容；插件不会自行生成日报或覆盖冲突文档。",
   "syncIncremental": "增量同步（推荐）",
   "syncFull": "全量同步",
   "testConnection": "测试 Zotero 连接",

@@ -78,6 +78,16 @@ Zotero traffic stays on `127.0.0.1:23119`. Settings, the library cache, document
 
 Even with these safeguards, maintain independent backups while the plugin is in internal testing.
 
+## Kimi research workflow import (0.2.0)
+
+The plugin exposes two generic operations: `ensure_papers` ensures that Zotero items, paper documents, `Note` documents, and bindings exist; `write_documents` writes caller-provided Markdown unchanged. Kimi Work remains responsible for recommendations, candidate deduplication, report/analysis content, and conflict policy. The plugin does not generate daily reports or overwrite conflicts on its own.
+
+Kimi Work submits jobs through `/api/file/putFile` under `data/storage/petal/siyuan-plugin-zotero-notes/jobs/pending/`. The plugin claims jobs every 2 seconds and writes results through `processing/` into `completed/` or `failed/`. Disable **Kimi research import queue** in the settings to turn off this channel. Job files never contain the Zotero write key.
+
+`write_documents` checks `expectedHash` before writing. A changed document returns `conflict` unless the caller explicitly sets `onConflict: "overwrite"`. `custom-research-content-hash` stores the normalized hash after import. The existing `custom-zotero-server-id`, `custom-zotero-item-key`, `custom-zotero-note-doc-id`, and `custom-zotero-note-key` attributes remain the source of truth for item binding and Note synchronization.
+
+Background imports reuse `createOrOpenExclusive({openTab:false})`, producing the same `Zotero/Paper title/Note` structure as manual creation. AI analysis written into `Note` can therefore use the existing preview, sync, and auto-sync features.
+
 ## Development
 
 The plugin is directly loadable CommonJS with no npm dependencies and no build step. Runtime files are located at the repository root.

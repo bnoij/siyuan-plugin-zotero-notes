@@ -17,7 +17,8 @@ const DEFAULT_SETTINGS = {
     authorLimit: 0,
     librarySyncInterval: 0,
     noteSyncInterval: 0,
-    syncMode: "incremental"
+    syncMode: "incremental",
+    workflowQueueEnabled: true
 };
 const FALLBACK = {
     pluginName: "Zotero 笔记",
@@ -40,6 +41,8 @@ const FALLBACK = {
     noteSyncIntervalTip: "每隔多少分钟自动把内容有变化的 Note 回传到 Zotero；0 表示关闭。",
     syncMode: "文库同步方式",
     syncModeTip: "增量同步先比对 Zotero 本地版本号，只拉取有变化的条目并识别删除，大幅减少刷新耗时；全量同步每次拉取整个文库。",
+    workflowQueueEnabled: "Kimi 研究导入队列",
+    workflowQueueEnabledTip: "允许 Kimi Work 通过插件私有任务目录导入文献与 AI 内容；插件不会自行生成日报或覆盖冲突文档。",
     syncIncremental: "增量同步（推荐）",
     syncFull: "全量同步",
     testConnection: "测试 Zotero 连接",
@@ -362,6 +365,7 @@ class ZoteroNotesPlugin extends Plugin {
 
     async onLayoutReady() {
         await this.rebuildBindings();
+        this.startWorkflowQueue();
         if (this.settings.autoImport) {
             this.refreshLibrary(false).catch((error) => {
                 if (error.name !== "AbortError") this.renderStatus(errorMessage(error));
@@ -391,8 +395,11 @@ class ZoteroNotesPlugin extends Plugin {
             this.settingControls.librarySyncInput.value = this.settings.librarySyncInterval;
             this.settingControls.noteSyncInput.value = this.settings.noteSyncInterval;
             this.settingControls.syncModeSelect.value = this.settings.syncMode;
+            this.settingControls.workflowQueueEnabled.checked = this.settings.workflowQueueEnabled;
         }
         this.startAutoSync();
+        this.stopWorkflowQueue();
+        this.startWorkflowQueue();
         this.render();
     }
 
@@ -400,6 +407,7 @@ class ZoteroNotesPlugin extends Plugin {
         this.dataChangeRevision = (this.dataChangeRevision || 0) + 1;
         this.abortController.abort();
         this.stopAutoSync();
+        this.stopWorkflowQueue();
         this.dockElement = null;
     }
 
@@ -412,6 +420,7 @@ class ZoteroNotesPlugin extends Plugin {
         merged.librarySyncInterval = clampInteger(merged.librarySyncInterval, 0, 1440, DEFAULT_SETTINGS.librarySyncInterval);
         merged.noteSyncInterval = clampInteger(merged.noteSyncInterval, 0, 1440, DEFAULT_SETTINGS.noteSyncInterval);
         merged.syncMode = merged.syncMode === "full" ? "full" : "incremental";
+        merged.workflowQueueEnabled = merged.workflowQueueEnabled !== false;
         return merged;
     }
 
@@ -773,6 +782,9 @@ class ZoteroNotesPlugin extends Plugin {
         noteSyncInput.max = "1440";
         noteSyncInput.className = "b3-text-field fn__block";
         noteSyncInput.value = this.settings.noteSyncInterval;
+        const workflowQueueEnabled = document.createElement("input");
+        workflowQueueEnabled.type = "checkbox";
+        workflowQueueEnabled.checked = this.settings.workflowQueueEnabled;
         const syncModeSelect = document.createElement("select");
         syncModeSelect.className = "b3-select fn__block";
         [["incremental", this.t("syncIncremental")], ["full", this.t("syncFull")]].forEach(([value, label]) => {
@@ -782,7 +794,7 @@ class ZoteroNotesPlugin extends Plugin {
             syncModeSelect.append(option);
         });
         syncModeSelect.value = this.settings.syncMode;
-        this.settingControls = { notebookSelect, rootInput, autoImport, authorLimitInput, librarySyncInput, noteSyncInput, syncModeSelect };
+        this.settingControls = { notebookSelect, rootInput, autoImport, authorLimitInput, librarySyncInput, noteSyncInput, syncModeSelect, workflowQueueEnabled };
         const save = async () => {
             const previous = { notebook: this.settings.notebook, rootName: this.settings.rootName };
             this.settings = this.normalizeSettings({
@@ -793,13 +805,16 @@ class ZoteroNotesPlugin extends Plugin {
                 authorLimit: authorLimitInput.value,
                 librarySyncInterval: librarySyncInput.value,
                 noteSyncInterval: noteSyncInput.value,
-                syncMode: syncModeSelect.value
+                syncMode: syncModeSelect.value,
+                workflowQueueEnabled: workflowQueueEnabled.checked
             });
             authorLimitInput.value = this.settings.authorLimit;
             librarySyncInput.value = this.settings.librarySyncInterval;
             noteSyncInput.value = this.settings.noteSyncInterval;
             await this.saveData("settings.json", this.settings);
             this.startAutoSync();
+            this.stopWorkflowQueue();
+            this.startWorkflowQueue();
             if (previous.notebook !== this.settings.notebook || previous.rootName !== this.settings.rootName) {
                 this.enqueue(() => this.migrateBindings());
             }
@@ -840,6 +855,11 @@ class ZoteroNotesPlugin extends Plugin {
             description: this.t("syncModeTip"),
             actionElement: syncModeSelect
         });
+        this.setting.addItem({
+            title: this.t("workflowQueueEnabled"),
+            description: this.t("workflowQueueEnabledTip"),
+            actionElement: workflowQueueEnabled
+        });
         const testButton = element("button", "b3-button b3-button--outline", this.t("testConnection"));
         testButton.addEventListener("click", async () => {
             testButton.disabled = true;
@@ -863,6 +883,7 @@ class ZoteroNotesPlugin extends Plugin {
         librarySyncInput.addEventListener("change", save);
         noteSyncInput.addEventListener("change", save);
         syncModeSelect.addEventListener("change", save);
+        workflowQueueEnabled.addEventListener("change", save);
     }
 
     async loadNotebooks(select) {
@@ -1106,16 +1127,17 @@ class ZoteroNotesPlugin extends Plugin {
         return { id, path };
     }
 
-    async createOrOpen(item) {
-        return this.withOperationLock(item.key, () => this.createOrOpenExclusive(item));
+    async createOrOpen(item, options = {}) {
+        return this.withOperationLock(item.key, () => this.createOrOpenExclusive(item, options));
     }
 
-    async createOrOpenExclusive(item) {
+    async createOrOpenExclusive(item, options = {}) {
+        const shouldOpenTab = options.openTab !== false;
         await this.reloadBindingsFromStorage();
         const existing = this.bindings[this.bindingKey(item.key)];
         if (existing?.parentDocId && existing?.noteDocId) {
-            await openTab({ app: this.app, doc: { id: existing.parentDocId } });
-            return;
+            if (shouldOpenTab) await openTab({ app: this.app, doc: { id: existing.parentDocId } });
+            return { parentDocId: existing.parentDocId, noteDocId: existing.noteDocId, path: existing.path || "" };
         }
         if (!this.settings.notebook) {
             showMessage(this.t("selectNotebook"));
@@ -1167,7 +1189,8 @@ class ZoteroNotesPlugin extends Plugin {
         });
         await this.saveBinding(binding);
         showMessage(this.t("noteCreated"));
-        await openTab({ app: this.app, doc: { id: binding.noteDocId } });
+        if (shouldOpenTab) await openTab({ app: this.app, doc: { id: binding.noteDocId } });
+        return { parentDocId: binding.parentDocId, noteDocId: binding.noteDocId, path };
     }
 
     async saveBinding(binding) {
@@ -1353,6 +1376,364 @@ class ZoteroNotesPlugin extends Plugin {
             await this.saveData("zotero-write-keys.json", this.writeKeys);
         }
         return result.data.key;
+    }
+
+    researchPaperIdentity(paper) {
+        const arxiv = cleanText(paper?.arxiv_id || paper?.arxivId).replace(/^arxiv:\s*/i, "").replace(/v\d+$/i, "").toLowerCase();
+        const doi = cleanText(paper?.doi || paper?.DOI).replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").toLowerCase();
+        const title = cleanText(paper?.title).toLocaleLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ").trim();
+        return { arxiv, doi, title };
+    }
+
+    researchItemMatches(item, paper) {
+        const expected = this.researchPaperIdentity(paper);
+        const data = item?.data || {};
+        const actual = this.researchPaperIdentity({
+            arxiv_id: data.archiveID || data.extra?.match(/arxiv:\s*([^\s;]+)/i)?.[1] || data.url?.match(/arxiv\.org\/(?:abs|pdf)\/([^\s/]+)/i)?.[1] || "",
+            doi: data.DOI || data.doi,
+            title: data.title
+        });
+        if (expected.arxiv && actual.arxiv) return expected.arxiv === actual.arxiv;
+        if (expected.doi && actual.doi) return expected.doi === actual.doi;
+        return !!expected.title && expected.title === actual.title;
+    }
+
+    researchItemData(paper, itemType = "preprint") {
+        const identity = this.researchPaperIdentity(paper);
+        const data = {
+            itemType,
+            title: cleanText(paper.title),
+            creators: (Array.isArray(paper.authors) ? paper.authors : []).filter(Boolean).map((name) => ({ creatorType: "author", name: cleanText(name) })),
+            abstractNote: cleanText(paper.abstract || paper.summary),
+            date: cleanText(paper.published || paper.date),
+            url: cleanText(paper.url) || (identity.arxiv ? `https://arxiv.org/abs/${identity.arxiv}` : ""),
+            DOI: cleanText(paper.doi || paper.DOI),
+            extra: identity.arxiv ? `arXiv: ${identity.arxiv}` : "",
+            tags: (Array.isArray(paper.tags) ? paper.tags : []).filter(Boolean).map((tag) => ({ tag: cleanText(tag) })),
+            collections: []
+        };
+        if (itemType === "preprint") {
+            data.repository = identity.arxiv ? "arXiv" : cleanText(paper.venue);
+            data.archiveID = identity.arxiv;
+        } else {
+            data.publicationTitle = cleanText(paper.venue);
+        }
+        return data;
+    }
+
+    async createResearchItem(paper) {
+        return this.withWriteKey(async (apiKey) => {
+            let created;
+            try {
+                created = await this.zoteroRequest(`${USER_PREFIX}/items`, {
+                    method: "POST",
+                    apiKey,
+                    headers: { "Zotero-Write-Token": createWriteToken() },
+                    body: [this.researchItemData(paper)]
+                });
+            } catch (error) {
+                if (error.status !== 400 || !/itemtype|preprint/i.test(errorMessage(error))) throw error;
+                created = await this.zoteroRequest(`${USER_PREFIX}/items`, {
+                    method: "POST",
+                    apiKey,
+                    headers: { "Zotero-Write-Token": createWriteToken() },
+                    body: [this.researchItemData(paper, "journalArticle")]
+                });
+            }
+            const saved = created.data?.successful?.["0"];
+            const key = saved?.key || saved?.data?.key;
+            if (!key) throw new Error("Zotero did not return the created item key.");
+            return { key, data: { ...saved.data, key } };
+        });
+    }
+
+    async createResearchAttachment(itemKey, paper) {
+        const url = cleanText(paper.pdf_url || paper.pdfUrl);
+        if (!url || !/^https?:\/\//i.test(url)) return null;
+        return this.withWriteKey((apiKey) => this.zoteroRequest(`${USER_PREFIX}/items`, {
+            method: "POST",
+            apiKey,
+            headers: { "Zotero-Write-Token": createWriteToken() },
+            body: [{
+                itemType: "attachment",
+                linkMode: "linked_url",
+                parentItem: itemKey,
+                title: "PDF",
+                url,
+                contentType: "application/pdf",
+                tags: [],
+                collections: []
+            }]
+        }));
+    }
+
+    async ensurePapers(papers) {
+        if (!Array.isArray(papers) || papers.length > 50) throw new Error("papers must be an array of at most 50 items.");
+        if (!papers.length) return [];
+        if (!this.settings.notebook) throw new Error(this.t("selectNotebook"));
+        await this.refreshLibrary(false);
+        const results = [];
+        let changed = false;
+        for (const paper of papers) {
+            try {
+                if (!cleanText(paper?.title)) throw new Error("Paper title is required.");
+                let item = this.library.items.find((candidate) => this.researchItemMatches(candidate, paper));
+                let itemStatus = "existing";
+                if (!item) {
+                    item = await this.createResearchItem(paper);
+                    itemStatus = "created";
+                    changed = true;
+                    this.library.items.push(item);
+                    if (this.library.itemObjects) this.library.itemObjects[item.key] = item;
+                    await this.createResearchAttachment(item.key, paper);
+                }
+                const documents = await this.createOrOpen(item, { openTab: false });
+                results.push({
+                    arxivId: this.researchPaperIdentity(paper).arxiv,
+                    title: cleanText(paper.title),
+                    itemKey: item.key,
+                    itemStatus,
+                    ...documents
+                });
+            } catch (error) {
+                results.push({
+                    arxivId: this.researchPaperIdentity(paper).arxiv,
+                    title: cleanText(paper?.title),
+                    itemStatus: "error",
+                    error: errorMessage(error)
+                });
+            }
+        }
+        if (changed) await this.refreshLibrary(false);
+        return results;
+    }
+
+    researchDocumentPath(path) {
+        const value = cleanText(path);
+        if (!value.startsWith("/") || value.includes("\\") || value.split("/").some((part) => part === "..")) {
+            throw new Error("Invalid document path.");
+        }
+        const segments = value.split("/").filter(Boolean).map((part) => safeDocumentTitle(part, "doc"));
+        if (!segments.length) throw new Error("Invalid document path.");
+        return `/${segments.join("/")}`;
+    }
+
+    researchContentHash(exported) {
+        const withoutTitle = String(exported || "").replace(/^# [^\n]+(?:\r?\n){2}/, "");
+        return stableHash(prepareNoteMarkdown(withoutTitle));
+    }
+
+    validateResearchWrite(operation) {
+        if (cleanText(operation?.markdown).length > 2 * 1024 * 1024) throw new Error("Markdown is too large.");
+        Object.keys(operation?.attrs || {}).forEach((name) => {
+            if (!name.startsWith("custom-research-")) throw new Error("Unsupported document attribute.");
+        });
+        if (operation?.path) this.researchDocumentPath(operation.path);
+        if (operation?.onConflict && !["report", "overwrite"].includes(operation.onConflict)) {
+            throw new Error("Unsupported conflict policy.");
+        }
+    }
+
+    async writeDocuments(documents) {
+        if (!Array.isArray(documents) || documents.length > 50) throw new Error("documents must be an array of at most 50 items.");
+        documents.forEach((operation) => this.validateResearchWrite(operation));
+        const results = [];
+        for (const operation of documents) {
+            try {
+                let docId = cleanText(operation.docId);
+                let path = operation.path ? this.researchDocumentPath(operation.path) : "";
+                if (!docId && path) {
+                    const ids = await this.request("/api/filetree/getIDsByHPath", { notebook: this.settings.notebook, path });
+                    docId = ids?.[0] || "";
+                }
+                if (!docId && !path) throw new Error("docId or path is required.");
+                if (!docId) {
+                    if (operation.expectedHash !== null && operation.onConflict !== "overwrite") {
+                        results.push({ path, status: "conflict", error: "Document does not exist." });
+                        continue;
+                    }
+                    docId = await this.request("/api/filetree/createDocWithMd", {
+                        notebook: this.settings.notebook,
+                        path,
+                        markdown: String(operation.markdown || "")
+                    });
+                } else {
+                    const current = await this.request("/api/lute/copyStdMarkdown", { id: docId });
+                    const currentHash = this.researchContentHash(current);
+                    if (operation.onConflict !== "overwrite" && currentHash !== operation.expectedHash) {
+                        results.push({ docId, path, status: "conflict", contentHash: currentHash });
+                        continue;
+                    }
+                    await this.request("/api/block/updateBlock", {
+                        dataType: "markdown",
+                        data: String(operation.markdown || ""),
+                        id: docId
+                    });
+                }
+                const exported = await this.request("/api/lute/copyStdMarkdown", { id: docId });
+                const contentHash = this.researchContentHash(exported);
+                await this.request("/api/attr/setBlockAttrs", {
+                    id: docId,
+                    attrs: {
+                        ...(operation.attrs || {}),
+                        "custom-research-content-hash": contentHash
+                    }
+                });
+                results.push({ docId, path, status: "written", contentHash });
+            } catch (error) {
+                results.push({ docId: operation.docId || "", path: operation.path || "", status: "error", error: errorMessage(error) });
+            }
+        }
+        return results;
+    }
+
+    workflowJobPath(directory, name) {
+        if (!/^[a-zA-Z0-9_.-]+\.json$/.test(name)) throw new Error("Invalid workflow job name.");
+        return `/data/storage/petal/${PLUGIN_NAME}/jobs/${directory}/${name}`;
+    }
+
+    async listWorkflowJobs(directory) {
+        const rows = await this.request("/api/file/readDir", {
+            path: `/data/storage/petal/${PLUGIN_NAME}/jobs/${directory}`
+        });
+        return (rows || []).filter((row) => !row.isDir && /\.json$/.test(row.name)).map((row) => ({
+            name: row.name,
+            updated: Number(row.updated || 0)
+        })).sort((a, b) => a.updated - b.updated || a.name.localeCompare(b.name));
+    }
+
+    async readWorkflowJob(directory, name) {
+        const response = await fetch("/api/file/getFile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: this.workflowJobPath(directory, name) }),
+            signal: this.abortController.signal
+        });
+        if (!response.ok) throw new Error(`Unable to read workflow job: ${response.status}`);
+        return response.json();
+    }
+
+    async writeWorkflowJob(directory, name, value) {
+        const body = new FormData();
+        const path = this.workflowJobPath(directory, name);
+        body.append("path", path);
+        body.append("isDir", "false");
+        body.append("modTime", String(Math.floor(Date.now() / 1000)));
+        body.append("file", new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }), name);
+        const response = await fetch("/api/file/putFile", {
+            method: "POST",
+            body,
+            signal: this.abortController.signal
+        });
+        if (!response.ok) throw new Error(`Unable to write workflow job: ${response.status}`);
+        const result = await response.json();
+        if (result.code !== 0) throw new Error(result.msg || "Unable to write workflow job.");
+    }
+
+    async moveWorkflowJob(from, to) {
+        await this.request("/api/file/renameFile", { path: from, newPath: to });
+    }
+
+    async removeWorkflowJob(directory, name) {
+        await this.request("/api/file/removeFile", { path: this.workflowJobPath(directory, name) });
+    }
+
+    async claimWorkflowJob() {
+        return this.withExclusiveLock(`${PLUGIN_NAME}:workflow-jobs`, async () => {
+            const jobs = await this.listWorkflowJobs("pending");
+            if (!jobs.length) return null;
+            const name = jobs[0].name;
+            const job = await this.readWorkflowJob("pending", name);
+            await this.moveWorkflowJob(
+                this.workflowJobPath("pending", name),
+                this.workflowJobPath("processing", name)
+            );
+            return { ...job, _name: name };
+        });
+    }
+
+    async recoverWorkflowJobs(now = Date.now()) {
+        const jobs = await this.listWorkflowJobs("processing");
+        const staleBefore = now - 15 * 60 * 1000;
+        for (const job of jobs) {
+            const updated = job.updated > 0 && job.updated < 1000000000000 ? job.updated * 1000 : job.updated;
+            if (updated > staleBefore) continue;
+            await this.moveWorkflowJob(
+                this.workflowJobPath("processing", job.name),
+                this.workflowJobPath("pending", job.name)
+            );
+        }
+    }
+
+    async processWorkflowJob(job) {
+        try {
+            if (!cleanText(job?.id)) throw new Error("Job id is required.");
+            let result;
+            if (job.type === "ensure_papers") {
+                const papers = await this.ensurePapers(job.payload?.papers);
+                result = { papers };
+                const failures = papers.filter((paper) => paper.itemStatus === "error");
+                return {
+                    status: failures.length === papers.length ? "failed" : failures.length ? "partial" : "completed",
+                    result,
+                    error: failures.length ? `${failures.length} paper operation(s) failed.` : undefined
+                };
+            }
+            if (job.type === "write_documents") {
+                const documents = await this.writeDocuments(job.payload?.documents);
+                result = { documents };
+                const failures = documents.filter((document) => document.status === "error");
+                return {
+                    status: failures.length === documents.length ? "failed" : failures.length ? "partial" : "completed",
+                    result,
+                    error: failures.length ? `${failures.length} document operation(s) failed.` : undefined
+                };
+            }
+            return { status: "failed", error: `Unsupported workflow job type: ${job.type}` };
+        } catch (error) {
+            return { status: "failed", error: errorMessage(error) };
+        }
+    }
+
+    async finishWorkflowJob(job, outcome) {
+        const directory = outcome.status === "failed" ? "failed" : "completed";
+        await this.writeWorkflowJob(directory, job._name, {
+            id: job.id,
+            type: job.type,
+            status: outcome.status,
+            result: outcome.result || null,
+            error: outcome.error || "",
+            completedAt: new Date().toISOString()
+        });
+        await this.removeWorkflowJob("processing", job._name);
+    }
+
+    async processWorkflowQueue() {
+        if (this.workflowQueueRunning) return;
+        this.workflowQueueRunning = true;
+        try {
+            const job = await this.claimWorkflowJob();
+            if (!job) return;
+            const outcome = await this.processWorkflowJob(job);
+            await this.finishWorkflowJob(job, outcome);
+        } finally {
+            this.workflowQueueRunning = false;
+        }
+    }
+
+    startWorkflowQueue() {
+        if (this.settings.workflowQueueEnabled === false || this.workflowQueueTimer) return;
+        this.recoverWorkflowJobs().catch(() => {});
+        this.processWorkflowQueue().catch(() => {});
+        this.workflowQueueTimer = setInterval(() => {
+            this.processWorkflowQueue().catch(() => {});
+        }, 2000);
+    }
+
+    stopWorkflowQueue() {
+        if (this.workflowQueueTimer) clearInterval(this.workflowQueueTimer);
+        this.workflowQueueTimer = null;
+        this.workflowQueueRunning = false;
     }
 
     async sanitizeNoteHTML(html) {

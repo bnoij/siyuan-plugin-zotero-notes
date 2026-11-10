@@ -19,6 +19,8 @@
   "noteSyncIntervalTip": "Minutes between automatic uploads of changed notes to Zotero; 0 disables it.",
   "syncMode": "Library sync mode",
   "syncModeTip": "Incremental sync compares Zotero local versions first, fetching only changed items and detecting deletions; full sync downloads the entire library every time.",
+  "workflowQueueEnabled": "Kimi research import queue",
+  "workflowQueueEnabledTip": "Allows Kimi Work to import papers and AI-written content through the plugin-private job directory. The plugin does not generate reports or overwrite conflicts on its own.",
   "syncIncremental": "Incremental (recommended)",
   "syncFull": "Full sync",
   "testConnection": "Test Zotero connection",

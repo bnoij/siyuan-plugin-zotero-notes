@@ -28,6 +28,8 @@ function makePlugin(overrides = {}) {
     plugin.dataChangeRevision = 0;
     plugin.render = () => {};
     plugin.renderStatus = () => {};
+    plugin.startWorkflowQueue = () => {};
+    plugin.stopWorkflowQueue = () => {};
     plugin.saveData = async () => {
         throw new Error("Unexpected saveData call");
     };
