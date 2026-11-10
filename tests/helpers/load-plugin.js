@@ -64,4 +64,4 @@ function stubRemote(plugin, { items = [remoteItem()], collections = [remoteColle
     plugin.fetchAll = async (path) => path.includes("collections") ? collections : items;
 }
 
-module.exports = { makePlugin, remoteItem, remoteCollection, stubRemote, openedDocuments };
+module.exports = { makePlugin, remoteItem, remoteCollection, stubRemote, openedDocuments, PluginClass };

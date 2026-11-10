@@ -10,7 +10,15 @@ const ATTR_SERVER = "custom-zotero-server-id";
 const ATTR_ITEM = "custom-zotero-item-key";
 const ATTR_NOTE_DOC = "custom-zotero-note-doc-id";
 const ATTR_NOTE_KEY = "custom-zotero-note-key";
-const DEFAULT_SETTINGS = { notebook: "", rootName: "Zotero", autoImport: true };
+const DEFAULT_SETTINGS = {
+    notebook: "",
+    rootName: "Zotero",
+    autoImport: true,
+    authorLimit: 0,
+    librarySyncInterval: 0,
+    noteSyncInterval: 0,
+    syncMode: "incremental"
+};
 const FALLBACK = {
     pluginName: "Zotero 笔记",
     library: "我的文库",
@@ -20,9 +28,20 @@ const FALLBACK = {
     notebook: "笔记存放笔记本",
     notebookTip: "论文文档将创建在所选笔记本的 Zotero 根文档下。",
     rootName: "根文档名称",
-    rootNameTip: "默认是 Zotero；修改只影响之后新建的根文档。",
+    rootNameTip: "默认是 Zotero；修改后，已有的论文笔记会自动迁移到新的根文档下。",
     autoImport: "启动时自动导入",
     autoImportTip: "自动读取 Zotero 文库索引，不会批量创建思源文档。",
+    authorLimit: "作者显示数量",
+    authorLimitTip: "文献列表中最多显示的作者数，超出的作者以“等”省略；0 表示不限制。",
+    etAl: "等",
+    librarySyncInterval: "文库自动同步间隔（分钟）",
+    librarySyncIntervalTip: "每隔多少分钟自动从 Zotero 刷新文库索引；0 表示关闭自动同步。",
+    noteSyncInterval: "Note 自动回传间隔（分钟）",
+    noteSyncIntervalTip: "每隔多少分钟自动把内容有变化的 Note 回传到 Zotero；0 表示关闭。",
+    syncMode: "文库同步方式",
+    syncModeTip: "增量同步先比对 Zotero 本地版本号，只拉取有变化的条目并识别删除，大幅减少刷新耗时；全量同步每次拉取整个文库。",
+    syncIncremental: "增量同步（推荐）",
+    syncFull: "全量同步",
     testConnection: "测试 Zotero 连接",
     newNote: "新建笔记",
     openNote: "打开笔记",
@@ -41,7 +60,7 @@ const FALLBACK = {
     noteCreated: "论文文档和 Note 已创建。",
     metadataRefreshed: "元数据已刷新，Note 内容未修改。",
     syncPreview: "回传预览",
-    syncPreviewTip: "Note 已转换为标准 Markdown。确认后将转为安全的 Zotero 富文本笔记。",
+    syncPreviewTip: "以下为实际回传内容的渲染效果预览；下方列出上传后可能丢失的格式。",
     cancel: "取消",
     confirmSync: "确认回传",
     emptyNote: "Note 为空；继续回传会创建或更新为空笔记。",
@@ -50,8 +69,28 @@ const FALLBACK = {
     authorizationDenied: "未获得 Zotero 写入授权。",
     unsupported: "部分内容未能转换",
     noTitle: "无标题",
-    operationFailed: "操作失败"
+    operationFailed: "操作失败",
+    autoSyncDone: "Note 自动回传完成",
+    migrationDone: "笔记迁移完成",
+    migrationFailed: "失败",
+    lossTitle: "上传后可能丢失的格式",
+    lossNone: "未检测到可能丢失的格式。",
+    lossMath: "数学公式（LaTeX）：公式渲染将丢失，仅保留源码文本",
+    lossTaskList: "任务列表：勾选框将丢失，仅保留文字",
+    lossEmbed: "嵌入内容（iframe、音视频等）：播放器将被移除",
+    lossDetails: "折叠块：折叠交互将丢失，内容保留",
+    lossHighlight: "高亮文本（==文字==）：高亮样式将丢失，文字保留",
+    lossCodeHighlight: "代码块语法高亮：代码内容保留，高亮配色丢失",
+    lossInlineStyle: "文字颜色等行内样式：样式将丢失，文字保留",
+    lossImageStyle: "图片尺寸与对齐属性：仅保留图片本身与替代文字",
+    lossIndent: "段落缩进：缩进样式将丢失，文字保留",
+    lossBlockRef: "思源块引用与思源链接：在 Zotero 中无法跳转回思源"
 };
+const PLUGIN_ICONS = `
+<symbol id="zoteroNotesIconNote" viewBox="0 0 16 16"><path d="M4 1.5h5.3L13 5.2v8.3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M9.3 1.5V5.2H13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M5.8 11.4h4.4M5.8 8.7h4.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></symbol>
+<symbol id="zoteroNotesIconRefresh" viewBox="0 0 16 16"><path d="M13.4 8a5.4 5.4 0 1 1-1.58-3.82" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M13.6 1.7v2.8h-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="zoteroNotesIconUpload" viewBox="0 0 16 16"><path d="M8 10.4V3.4M5 6.4l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.6 10.8v1.7a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-1.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+<symbol id="zoteroNotesIconZotero" viewBox="0 0 16 16"><path d="M3.2 2.5h9.6v1.9L7 12.4h5.8v1.9H3.2v-1.9L9 4.4H3.2z" fill="currentColor"/></symbol>`;
 
 function element(tag, className, content) {
     const result = document.createElement(tag);
@@ -94,6 +133,19 @@ function safeDocumentTitle(value, itemKey) {
     return title || `Untitled ${itemKey}`;
 }
 
+function clampInteger(value, min, max, fallback) {
+    const number = Number.parseInt(value, 10);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.min(max, Math.max(min, number));
+}
+
+function authorList(item) {
+    return (item?.data?.creators || [])
+        .filter((creator) => !creator.creatorType || creator.creatorType === "author")
+        .map((creator) => cleanText(creator.name) || cleanText(`${creator.firstName || ""} ${creator.lastName || ""}`))
+        .filter(Boolean);
+}
+
 function itemTitle(item) {
     return cleanText(item?.data?.title) || cleanText(item?.meta?.creatorSummary) || item?.key || "Untitled";
 }
@@ -104,11 +156,7 @@ function itemYear(item) {
 }
 
 function itemAuthors(item) {
-    return (item?.data?.creators || [])
-        .filter((creator) => !creator.creatorType || creator.creatorType === "author")
-        .map((creator) => cleanText(creator.name) || cleanText(`${creator.firstName || ""} ${creator.lastName || ""}`))
-        .filter(Boolean)
-        .join(", ");
+    return authorList(item).join(", ");
 }
 
 function isRegularItem(item) {
@@ -141,6 +189,120 @@ function libraryFingerprint(library) {
     return stableStringify({ serverID: library.serverID, collections, items });
 }
 
+function diffObjectVersions(cachedObjects, newVersions) {
+    const cached = cachedObjects || {};
+    const versions = newVersions && typeof newVersions === "object" ? newVersions : {};
+    const changed = [];
+    const deleted = [];
+    Object.entries(versions).forEach(([key, version]) => {
+        if (!cached[key] || cached[key].version !== version) changed.push(key);
+    });
+    Object.keys(cached).forEach((key) => {
+        if (!(key in versions)) deleted.push(key);
+    });
+    return { changed, deleted };
+}
+
+function composeLibraryFromObjects(serverID, itemObjects, collectionObjects, importedAt) {
+    const allItems = Object.values(itemObjects || {});
+    const items = allItems.filter(isRegularItem).map((item) => ({
+        ...item,
+        attachments: allItems.filter((child) => child?.data?.parentItem === item.key && child?.data?.itemType === "attachment"),
+        stale: false
+    }));
+    items.sort((a, b) => itemTitle(a).localeCompare(itemTitle(b), undefined, { sensitivity: "base" }));
+    const latest = allItems.reduce((result, item) => {
+        const modified = Date.parse(item.data?.dateModified || "");
+        return Number.isFinite(modified) ? Math.max(result, modified) : result;
+    }, importedAt || 0);
+    return {
+        serverID: serverID || "",
+        itemObjects: itemObjects || {},
+        collectionObjects: collectionObjects || {},
+        collections: Object.values(collectionObjects || {}),
+        items,
+        importedAt: latest
+    };
+}
+
+function cacheToLibrary(cache) {
+    if (!cache || typeof cache !== "object") return null;
+    if (cache.itemObjects && cache.collectionObjects) {
+        const library = composeLibraryFromObjects(cache.serverID, cache.itemObjects, cache.collectionObjects, 0);
+        library.importedAt = cache.importedAt || 0;
+        return library;
+    }
+    if (Array.isArray(cache.items) && Array.isArray(cache.collections)) {
+        const itemObjects = {};
+        cache.items.forEach((item) => {
+            if (!item?.key) return;
+            const { attachments, ...rest } = item;
+            itemObjects[item.key] = rest;
+            (attachments || []).forEach((attachment) => {
+                if (attachment?.key) itemObjects[attachment.key] = attachment;
+            });
+        });
+        const collectionObjects = {};
+        cache.collections.forEach((collection) => {
+            if (collection?.key) collectionObjects[collection.key] = collection;
+        });
+        const library = composeLibraryFromObjects(cache.serverID, itemObjects, collectionObjects, 0);
+        library.importedAt = cache.importedAt || 0;
+        return library;
+    }
+    return null;
+}
+
+function stableHash(value) {
+    const text = String(value || "");
+    let hash = 5381;
+    for (let i = 0; i < text.length; i++) {
+        hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
+    }
+    return hash.toString(36);
+}
+
+function isDirectChildOfRoot(hpath, rootHPath) {
+    if (!hpath || !rootHPath) return false;
+    const prefix = `${rootHPath}/`;
+    if (!hpath.startsWith(prefix)) return false;
+    return !hpath.slice(prefix.length).includes("/");
+}
+
+function collisionTitle(title, itemKey) {
+    const suffix = `[${itemKey}]`;
+    return title.endsWith(suffix) ? title : `${title} ${suffix}`;
+}
+
+function prepareNoteMarkdown(exported) {
+    return String(exported || "")
+        .replace(/^# Note(?:\r?\n){2}/, "")
+        .replace(/<p class="indent--\d+">([\s\S]*?)<\/p>/g, "$1")
+        .replace(/[​-‍﻿]/g, "")
+        .split(/\r?\n/)
+        .map((line) => /^[\s　]*$/.test(line) ? "" : line)
+        .join("\n");
+}
+
+function analyzeFormatLosses(markdown, html) {
+    const md = String(markdown || "");
+    const markup = String(html || "");
+    const losses = [];
+    if (/<math[\s>]|<svg[\s>]|language-math/i.test(markup)
+        || /\$\$[\s\S]+?\$\$|\\\(|\\\[/.test(md)
+        || /(^|[^\w$])\$[^\s$][^$\n]*?\$/.test(md)) losses.push("Math");
+    if (/<input[^>]*type="checkbox"/i.test(markup) || /^\s*[-*]\s+\[[ xX]\]/m.test(md)) losses.push("TaskList");
+    if (/<(?:iframe|video|audio|object|embed)[\s>]/i.test(markup)) losses.push("Embed");
+    if (/<(?:details|summary)[\s>]/i.test(markup)) losses.push("Details");
+    if (/==[^=\n]+==/.test(md)) losses.push("Highlight");
+    if (/<pre[\s>]|<code[\s>]/i.test(markup)) losses.push("CodeHighlight");
+    if (/<(?:span|div|p|font)[^>]*\sstyle=/i.test(markup)) losses.push("InlineStyle");
+    if (/<img[^>]*\s(?:width|height|style)=/i.test(markup)) losses.push("ImageStyle");
+    if (/<p class="indent--\d+"/i.test(md)) losses.push("Indent");
+    if (/siyuan:\/\//i.test(markup) || /\(\(/.test(md)) losses.push("BlockRef");
+    return losses;
+}
+
 class ZoteroNotesPlugin extends Plugin {
     async onload() {
         this.abortController = new AbortController();
@@ -152,19 +314,20 @@ class ZoteroNotesPlugin extends Plugin {
         this.operationQueue = Promise.resolve();
         this.refreshing = false;
         this.dockElement = null;
+        this.librarySyncTimer = null;
+        this.noteSyncTimer = null;
+        this.addIcons(PLUGIN_ICONS);
         const [settings, cache, bindings, writeKeys] = await Promise.all([
             this.loadData("settings.json"),
             this.loadData("library-cache.json"),
             this.loadData("bindings.json"),
             this.loadData("zotero-write-keys.json")
         ]);
-        this.settings = { ...DEFAULT_SETTINGS, ...(settings || {}) };
+        this.settings = this.normalizeSettings(settings);
         this.bindings = bindings && typeof bindings === "object" ? bindings : {};
         this.writeKeys = writeKeys && typeof writeKeys === "object" ? writeKeys : {};
-        if (cache && Array.isArray(cache.items) && Array.isArray(cache.collections)) {
-            this.library = cache;
-            this.library.items.forEach((item) => { item.stale = false; });
-        }
+        const cachedLibrary = cacheToLibrary(cache);
+        if (cachedLibrary) this.library = cachedLibrary;
         this.initSetting();
         this.addDock({
             config: {
@@ -192,8 +355,9 @@ class ZoteroNotesPlugin extends Plugin {
                 menu.addItem({ icon: "iconRefresh", label: this.t("refresh"), click: () => this.refreshLibrary(true) });
                 menu.addItem({ icon: "iconSettings", label: this.t("settings"), click: () => this.openSetting() });
             },
-            callback: () => this.refreshLibrary(true)
+            callback: () => this.openSetting()
         });
+        this.startAutoSync();
     }
 
     async onLayoutReady() {
@@ -215,24 +379,172 @@ class ZoteroNotesPlugin extends Plugin {
             this.loadData("zotero-write-keys.json")
         ]);
         if (revision !== this.dataChangeRevision) return;
-        this.settings = { ...DEFAULT_SETTINGS, ...(settings || {}) };
+        this.settings = this.normalizeSettings(settings);
         this.bindings = { ...this.bindings, ...(bindings && typeof bindings === "object" ? bindings : {}) };
         this.writeKeys = writeKeys && typeof writeKeys === "object" ? writeKeys : {};
-        this.library = cache && Array.isArray(cache.items) && Array.isArray(cache.collections)
-            ? cache
-            : { serverID: "", collections: [], items: [], importedAt: 0 };
+        this.library = cacheToLibrary(cache) || { serverID: "", collections: [], items: [], importedAt: 0 };
         if (this.settingControls) {
             this.settingControls.notebookSelect.value = this.settings.notebook;
             this.settingControls.rootInput.value = this.settings.rootName;
             this.settingControls.autoImport.checked = this.settings.autoImport;
+            this.settingControls.authorLimitInput.value = this.settings.authorLimit;
+            this.settingControls.librarySyncInput.value = this.settings.librarySyncInterval;
+            this.settingControls.noteSyncInput.value = this.settings.noteSyncInterval;
+            this.settingControls.syncModeSelect.value = this.settings.syncMode;
         }
+        this.startAutoSync();
         this.render();
     }
 
     onunload() {
         this.dataChangeRevision = (this.dataChangeRevision || 0) + 1;
         this.abortController.abort();
+        this.stopAutoSync();
         this.dockElement = null;
+    }
+
+    normalizeSettings(settings) {
+        const merged = { ...DEFAULT_SETTINGS, ...(settings || {}) };
+        merged.notebook = typeof merged.notebook === "string" ? merged.notebook : "";
+        merged.rootName = cleanText(merged.rootName) || DEFAULT_SETTINGS.rootName;
+        merged.autoImport = !!merged.autoImport;
+        merged.authorLimit = clampInteger(merged.authorLimit, 0, 99, DEFAULT_SETTINGS.authorLimit);
+        merged.librarySyncInterval = clampInteger(merged.librarySyncInterval, 0, 1440, DEFAULT_SETTINGS.librarySyncInterval);
+        merged.noteSyncInterval = clampInteger(merged.noteSyncInterval, 0, 1440, DEFAULT_SETTINGS.noteSyncInterval);
+        merged.syncMode = merged.syncMode === "full" ? "full" : "incremental";
+        return merged;
+    }
+
+    formatAuthors(authors, limit, etAl) {
+        const list = Array.isArray(authors) ? authors.filter(Boolean) : [];
+        if (limit > 0 && list.length > limit) {
+            return `${list.slice(0, limit).join(", ")}, ${etAl || "et al."}`;
+        }
+        return list.join(", ");
+    }
+
+    t(key) {
+        return this.i18n?.[key] || FALLBACK[key] || key;
+    }
+
+    bindingKey(itemKey, serverID = this.library.serverID) {
+        return `${serverID || "unknown"}:${itemKey}`;
+    }
+
+    startAutoSync() {
+        this.stopAutoSync();
+        if (this.settings.librarySyncInterval > 0) {
+            this.librarySyncTimer = setInterval(() => {
+                this.refreshLibrary(false);
+            }, this.settings.librarySyncInterval * 60 * 1000);
+        }
+        if (this.settings.noteSyncInterval > 0) {
+            this.noteSyncTimer = setInterval(() => {
+                this.enqueue(() => this.autoSyncNotes());
+            }, this.settings.noteSyncInterval * 60 * 1000);
+        }
+    }
+
+    stopAutoSync() {
+        if (this.librarySyncTimer) {
+            clearInterval(this.librarySyncTimer);
+            this.librarySyncTimer = null;
+        }
+        if (this.noteSyncTimer) {
+            clearInterval(this.noteSyncTimer);
+            this.noteSyncTimer = null;
+        }
+    }
+
+    async autoSyncNotes() {
+        if (!this.library.serverID || this.refreshing) return;
+        try {
+            await this.zoteroPage(`${USER_PREFIX}/items?limit=1`);
+        } catch {
+            return;
+        }
+        const entries = Object.values(this.bindings).filter((binding) =>
+            binding?.noteDocId
+            && binding.serverID === this.library.serverID
+            && !binding.stale
+            && this.library.items.some((item) => item.key === binding.itemKey));
+        let uploaded = 0;
+        let failed = 0;
+        for (const binding of entries) {
+            try {
+                const changed = await this.withOperationLock(binding.itemKey, async () => {
+                    const item = this.library.items.find((candidate) => candidate.key === binding.itemKey);
+                    const exported = String(await this.request("/api/lute/copyStdMarkdown", { id: binding.noteDocId }) || "");
+                    const markdown = prepareNoteMarkdown(exported);
+                    const hash = stableHash(markdown);
+                    if (hash === binding.noteHash) return false;
+                    const converted = await this.request("/api/lute/md2html", { markdown, mode: "" });
+                    const sanitized = await this.sanitizeNoteHTML(converted?.html || "");
+                    await this.syncNote(item, binding, sanitized.html);
+                    binding.noteHash = hash;
+                    await this.saveBinding(binding);
+                    return true;
+                });
+                if (changed) uploaded++;
+            } catch (error) {
+                if (error.status === 412) continue;
+                failed++;
+            }
+        }
+        if (uploaded || failed) {
+            showMessage(`${this.t("autoSyncDone")} · ${uploaded} ✓${failed ? ` · ${failed} ✗` : ""}`, 6000);
+        }
+    }
+
+    async migrateBindings() {
+        if (!this.settings.notebook) return;
+        return this.withExclusiveLock(`${PLUGIN_NAME}:migrate`, async () => {
+            let migrated = 0;
+            let failed = 0;
+            try {
+                await this.rebuildBindings();
+                const root = await this.ensureRoot();
+                const rootHPath = await this.request("/api/filetree/getHPathByID", { id: root.id });
+                for (const binding of Object.values(this.bindings)) {
+                    if (!binding?.parentDocId) continue;
+                    try {
+                        const hpath = await this.request("/api/filetree/getHPathByID", { id: binding.parentDocId });
+                        if (!hpath || isDirectChildOfRoot(hpath, rootHPath)) continue;
+                        const segments = hpath.split("/").filter(Boolean);
+                        const title = segments[segments.length - 1] || "";
+                        if (!title) {
+                            failed++;
+                            continue;
+                        }
+                        const existing = await this.request("/api/filetree/getIDsByHPath", {
+                            notebook: this.settings.notebook,
+                            path: `${rootHPath}/${title}`
+                        });
+                        if (existing?.length && !existing.includes(binding.parentDocId)) {
+                            await this.request("/api/filetree/renameDocByID", {
+                                id: binding.parentDocId,
+                                title: collisionTitle(title, binding.itemKey)
+                            });
+                        }
+                        await this.request("/api/filetree/moveDocsByID", {
+                            fromIDs: [binding.parentDocId],
+                            toID: root.id
+                        });
+                        migrated++;
+                    } catch {
+                        failed++;
+                    }
+                }
+            } catch (error) {
+                if (error.name !== "AbortError") {
+                    showMessage(`${this.t("migrationFailed")}: ${errorMessage(error)}`, 8000);
+                }
+                return;
+            }
+            if (migrated || failed) {
+                showMessage(`${this.t("migrationDone")} · ${migrated} ✓${failed ? ` · ${failed} ✗` : ""}`, 6000);
+            }
+        });
     }
 
     async reloadBindingsFromStorage() {
@@ -257,14 +569,6 @@ class ZoteroNotesPlugin extends Plugin {
 
     withBindingsLock(operation) {
         return this.withExclusiveLock(`${PLUGIN_NAME}:bindings`, operation);
-    }
-
-    t(key) {
-        return this.i18n?.[key] || FALLBACK[key] || key;
-    }
-
-    bindingKey(itemKey, serverID = this.library.serverID) {
-        return `${serverID || "unknown"}:${itemKey}`;
     }
 
     async request(url, data = {}, options = {}) {
@@ -340,6 +644,55 @@ class ZoteroNotesPlugin extends Plugin {
         return rows;
     }
 
+    async fullLibrary(serverID) {
+        const [collections, allItems] = await Promise.all([
+            this.fetchAll(`${USER_PREFIX}/collections`),
+            this.fetchAll(`${USER_PREFIX}/items`)
+        ]);
+        const itemObjects = {};
+        allItems.forEach((item) => {
+            if (item?.key) itemObjects[item.key] = item;
+        });
+        const collectionObjects = {};
+        collections.forEach((collection) => {
+            if (collection?.key) collectionObjects[collection.key] = collection;
+        });
+        return composeLibraryFromObjects(serverID, itemObjects, collectionObjects, 0);
+    }
+
+    async incrementalLibrary(serverID) {
+        const [itemVersions, collectionVersions] = await Promise.all([
+            this.zoteroPage(`${USER_PREFIX}/items?format=versions`),
+            this.zoteroPage(`${USER_PREFIX}/collections?format=versions`)
+        ]);
+        const itemDiff = diffObjectVersions(this.library.itemObjects, itemVersions.data);
+        const collectionDiff = diffObjectVersions(this.library.collectionObjects, collectionVersions.data);
+        const itemObjects = { ...this.library.itemObjects };
+        const collectionObjects = { ...this.library.collectionObjects };
+        itemDiff.deleted.forEach((key) => { delete itemObjects[key]; });
+        collectionDiff.deleted.forEach((key) => { delete collectionObjects[key]; });
+        if (itemDiff.changed.length) {
+            const changedItems = await this.fetchObjectsByKeys(`${USER_PREFIX}/items`, "itemKey", itemDiff.changed);
+            changedItems.forEach((item) => { itemObjects[item.key] = item; });
+        }
+        if (collectionDiff.changed.length) {
+            const changedCollections = await this.fetchObjectsByKeys(`${USER_PREFIX}/collections`, "collectionKey", collectionDiff.changed);
+            changedCollections.forEach((collection) => { collectionObjects[collection.key] = collection; });
+        }
+        return composeLibraryFromObjects(serverID, itemObjects, collectionObjects, 0);
+    }
+
+    async fetchObjectsByKeys(path, param, keys) {
+        const rows = [];
+        for (let start = 0; start < keys.length; start += 50) {
+            const chunk = keys.slice(start, start + 50);
+            const result = await this.zoteroPage(`${path}?${param}=${chunk.join(",")}`);
+            if (!Array.isArray(result.data)) throw new Error("Unexpected Zotero response.");
+            rows.push(...result.data);
+        }
+        return rows;
+    }
+
     async refreshLibrary(notify) {
         if (this.refreshing) return;
         this.refreshing = true;
@@ -347,30 +700,23 @@ class ZoteroNotesPlugin extends Plugin {
         try {
             const probe = await this.zoteroPage(`${USER_PREFIX}/items?limit=1`);
             if (!probe.serverID) throw new Error("Zotero 10+ is required; Zotero-Server-ID is missing.");
-            const [collections, allItems] = await Promise.all([
-                this.fetchAll(`${USER_PREFIX}/collections`),
-                this.fetchAll(`${USER_PREFIX}/items`)
-            ]);
-            const items = allItems.filter(isRegularItem).map((item) => ({
-                ...item,
-                attachments: allItems.filter((child) => child?.data?.parentItem === item.key && child?.data?.itemType === "attachment"),
-                stale: false
-            }));
-            items.sort((a, b) => itemTitle(a).localeCompare(itemTitle(b), undefined, { sensitivity: "base" }));
-            const nextLibrary = { serverID: probe.serverID, collections, items, importedAt: this.library.importedAt || 0 };
+            const canIncremental = this.settings.syncMode !== "full"
+                && this.library.serverID
+                && this.library.serverID === probe.serverID
+                && this.library.itemObjects;
+            const nextLibrary = canIncremental
+                ? await this.incrementalLibrary(probe.serverID)
+                : await this.fullLibrary(probe.serverID);
             const nextBindings = Object.fromEntries(Object.entries(this.bindings).map(([key, binding]) => [key, { ...binding }]));
-            const knownKeys = new Set(items.map((item) => item.key));
+            const knownKeys = new Set(nextLibrary.items.map((item) => item.key));
             Object.values(nextBindings).forEach((binding) => {
                 if (binding.serverID === probe.serverID) binding.stale = !knownKeys.has(binding.itemKey);
             });
             const changed = libraryFingerprint(nextLibrary) !== libraryFingerprint(this.library)
                 || stableStringify(nextBindings) !== stableStringify(this.bindings);
-            if (changed) {
-                nextLibrary.importedAt = items.reduce((latest, item) => {
-                    const modified = Date.parse(item.data?.dateModified || "");
-                    return Number.isFinite(modified) ? Math.max(latest, modified) : latest;
-                }, this.library.importedAt || 0);
-            }
+            nextLibrary.importedAt = changed
+                ? Math.max(nextLibrary.importedAt, this.library.importedAt || 0)
+                : this.library.importedAt;
             this.library = nextLibrary;
             this.bindings = nextBindings;
             if (changed) {
@@ -378,7 +724,12 @@ class ZoteroNotesPlugin extends Plugin {
                     const stored = await this.loadData("bindings.json");
                     this.bindings = { ...this.bindings, ...(stored && typeof stored === "object" ? stored : {}) };
                     await Promise.all([
-                        this.saveData("library-cache.json", this.library),
+                        this.saveData("library-cache.json", {
+                            serverID: this.library.serverID,
+                            importedAt: this.library.importedAt,
+                            itemObjects: this.library.itemObjects,
+                            collectionObjects: this.library.collectionObjects
+                        }),
                         this.saveData("bindings.json", this.bindings)
                     ]);
                 });
@@ -404,14 +755,54 @@ class ZoteroNotesPlugin extends Plugin {
         const autoImport = document.createElement("input");
         autoImport.type = "checkbox";
         autoImport.checked = this.settings.autoImport;
-        this.settingControls = { notebookSelect, rootInput, autoImport };
+        const authorLimitInput = document.createElement("input");
+        authorLimitInput.type = "number";
+        authorLimitInput.min = "0";
+        authorLimitInput.max = "99";
+        authorLimitInput.className = "b3-text-field fn__block";
+        authorLimitInput.value = this.settings.authorLimit;
+        const librarySyncInput = document.createElement("input");
+        librarySyncInput.type = "number";
+        librarySyncInput.min = "0";
+        librarySyncInput.max = "1440";
+        librarySyncInput.className = "b3-text-field fn__block";
+        librarySyncInput.value = this.settings.librarySyncInterval;
+        const noteSyncInput = document.createElement("input");
+        noteSyncInput.type = "number";
+        noteSyncInput.min = "0";
+        noteSyncInput.max = "1440";
+        noteSyncInput.className = "b3-text-field fn__block";
+        noteSyncInput.value = this.settings.noteSyncInterval;
+        const syncModeSelect = document.createElement("select");
+        syncModeSelect.className = "b3-select fn__block";
+        [["incremental", this.t("syncIncremental")], ["full", this.t("syncFull")]].forEach(([value, label]) => {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = label;
+            syncModeSelect.append(option);
+        });
+        syncModeSelect.value = this.settings.syncMode;
+        this.settingControls = { notebookSelect, rootInput, autoImport, authorLimitInput, librarySyncInput, noteSyncInput, syncModeSelect };
         const save = async () => {
-            this.settings = {
+            const previous = { notebook: this.settings.notebook, rootName: this.settings.rootName };
+            this.settings = this.normalizeSettings({
+                ...this.settings,
                 notebook: notebookSelect.value,
-                rootName: cleanText(rootInput.value) || "Zotero",
-                autoImport: autoImport.checked
-            };
+                rootName: rootInput.value,
+                autoImport: autoImport.checked,
+                authorLimit: authorLimitInput.value,
+                librarySyncInterval: librarySyncInput.value,
+                noteSyncInterval: noteSyncInput.value,
+                syncMode: syncModeSelect.value
+            });
+            authorLimitInput.value = this.settings.authorLimit;
+            librarySyncInput.value = this.settings.librarySyncInterval;
+            noteSyncInput.value = this.settings.noteSyncInterval;
             await this.saveData("settings.json", this.settings);
+            this.startAutoSync();
+            if (previous.notebook !== this.settings.notebook || previous.rootName !== this.settings.rootName) {
+                this.enqueue(() => this.migrateBindings());
+            }
         };
         this.setting = new Setting({ confirmCallback: save });
         this.setting.addItem({
@@ -428,6 +819,26 @@ class ZoteroNotesPlugin extends Plugin {
             title: this.t("autoImport"),
             description: this.t("autoImportTip"),
             actionElement: autoImport
+        });
+        this.setting.addItem({
+            title: this.t("authorLimit"),
+            description: this.t("authorLimitTip"),
+            actionElement: authorLimitInput
+        });
+        this.setting.addItem({
+            title: this.t("librarySyncInterval"),
+            description: this.t("librarySyncIntervalTip"),
+            actionElement: librarySyncInput
+        });
+        this.setting.addItem({
+            title: this.t("noteSyncInterval"),
+            description: this.t("noteSyncIntervalTip"),
+            actionElement: noteSyncInput
+        });
+        this.setting.addItem({
+            title: this.t("syncMode"),
+            description: this.t("syncModeTip"),
+            actionElement: syncModeSelect
         });
         const testButton = element("button", "b3-button b3-button--outline", this.t("testConnection"));
         testButton.addEventListener("click", async () => {
@@ -448,6 +859,10 @@ class ZoteroNotesPlugin extends Plugin {
         notebookSelect.addEventListener("change", save);
         rootInput.addEventListener("change", save);
         autoImport.addEventListener("change", save);
+        authorLimitInput.addEventListener("change", save);
+        librarySyncInput.addEventListener("change", save);
+        noteSyncInput.addEventListener("change", save);
+        syncModeSelect.addEventListener("change", save);
     }
 
     async loadNotebooks(select) {
@@ -469,6 +884,7 @@ class ZoteroNotesPlugin extends Plugin {
 
     buildDock() {
         this.dockElement.replaceChildren();
+        this.dockElement.classList.add("siyuan-plugin-zotero-notes__dock");
         const root = element("div", "siyuan-plugin-zotero-notes fn__flex-1 fn__flex-column");
         const toolbar = element("div", "siyuan-plugin-zotero-notes__toolbar");
         this.searchInput = document.createElement("input");
@@ -591,35 +1007,59 @@ class ZoteroNotesPlugin extends Plugin {
         const binding = this.bindings[this.bindingKey(item.key)];
         const row = element("li", "siyuan-plugin-zotero-notes__item");
         row.setAttribute("role", "treeitem");
-        const main = element("div", "siyuan-plugin-zotero-notes__item-main");
-        const text = element("div");
+        const text = element("div", "siyuan-plugin-zotero-notes__item-text");
         const title = element("button", "siyuan-plugin-zotero-notes__title", itemTitle(item));
         title.title = itemTitle(item);
         title.addEventListener("click", () => this.enqueue(() => this.createOrOpen(item)));
-        const authors = itemAuthors(item);
+        const authors = this.formatAuthors(authorList(item), this.settings.authorLimit, this.t("etAl"));
         const meta = [authors, itemYear(item)].filter(Boolean).join(" · ");
         text.append(title, element("div", "siyuan-plugin-zotero-notes__meta", meta || item.key));
-        const primary = element("button", "b3-button b3-button--outline siyuan-plugin-zotero-notes__action", binding ? this.t("openNote") : this.t("newNote"));
-        primary.addEventListener("click", () => this.enqueue(() => this.createOrOpen(item)));
-        main.append(text, primary);
-        row.append(main);
         const tools = element("div", "siyuan-plugin-zotero-notes__item-tools");
-        if (binding) {
-            tools.append(
-                this.itemButton("↻", this.t("refreshMetadata"), () => this.enqueue(() => this.refreshMetadata(item))),
-                this.itemButton("⇧", this.t("syncNote"), () => this.enqueue(() => this.previewNoteSync(item)))
-            );
-        }
-        tools.append(this.itemButton("Z", this.t("openZotero"), () => window.open(`zotero://select/library/items/${item.key}`)));
-        row.append(tools);
+        tools.append(
+            this.itemButton({
+                icon: "#zoteroNotesIconNote",
+                label: binding ? this.t("openNote") : this.t("newNote"),
+                title: binding ? this.t("openNote") : this.t("newNote"),
+                onClick: () => this.enqueue(() => this.createOrOpen(item))
+            }),
+            this.itemButton({
+                icon: "#zoteroNotesIconRefresh",
+                label: this.t("refreshMetadata"),
+                title: this.t("refreshMetadata"),
+                disabled: !binding,
+                onClick: () => this.enqueue(() => this.refreshMetadata(item))
+            }),
+            this.itemButton({
+                icon: "#zoteroNotesIconUpload",
+                label: this.t("syncNote"),
+                title: this.t("syncNote"),
+                disabled: !binding?.noteDocId,
+                onClick: () => this.enqueue(() => this.previewNoteSync(item))
+            }),
+            this.itemButton({
+                icon: "#zoteroNotesIconZotero",
+                label: this.t("openZotero"),
+                title: this.t("openZotero"),
+                onClick: () => window.open(`zotero://select/library/items/${item.key}`)
+            })
+        );
+        row.append(text, tools);
         return row;
     }
 
-    itemButton(label, title, callback) {
-        const button = element("button", "b3-button b3-button--text siyuan-plugin-zotero-notes__action", label);
+    itemButton({ icon, label, title, onClick, disabled }) {
+        const button = element("button", "b3-button b3-button--outline siyuan-plugin-zotero-notes__action");
         button.title = title;
         button.setAttribute("aria-label", title);
-        button.addEventListener("click", callback);
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("class", "siyuan-plugin-zotero-notes__action-icon");
+        const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+        use.setAttribute("href", icon);
+        use.setAttribute("xlink:href", icon);
+        svg.append(use);
+        button.append(svg, element("span", "siyuan-plugin-zotero-notes__action-label", label));
+        if (disabled) button.disabled = true;
+        button.addEventListener("click", onClick);
         return button;
     }
 
@@ -804,21 +1244,32 @@ class ZoteroNotesPlugin extends Plugin {
         const binding = this.bindings[this.bindingKey(item.key)];
         if (!binding?.noteDocId) throw new Error(this.t("openParentFirst"));
         const exported = String(await this.request("/api/lute/copyStdMarkdown", { id: binding.noteDocId }) || "");
-        const markdown = exported.replace(/^# Note(?:\r?\n){2}/, "");
+        const rawMarkdown = exported.replace(/^# Note(?:\r?\n){2}/, "");
+        const markdown = prepareNoteMarkdown(rawMarkdown);
         const converted = await this.request("/api/lute/md2html", { markdown, mode: "" });
         const sanitized = await this.sanitizeNoteHTML(converted?.html || "");
         const dialog = new Dialog({
-            title: `${this.t("syncPreview")} — ${itemTitle(item)}`,
-            content: `<div class="b3-dialog__content"><p>${this.t("syncPreviewTip")}</p><textarea class="b3-text-field siyuan-plugin-zotero-notes__preview" readonly></textarea><div class="siyuan-plugin-zotero-notes__warnings"></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--cancel"></button><div class="fn__space"></div><button class="b3-button b3-button--text"></button></div>`,
+            title: this.t("syncPreview"),
+            content: `<div class="b3-dialog__content"><p>${this.t("syncPreviewTip")}</p><div class="b3-typography siyuan-plugin-zotero-notes__render"></div><div class="siyuan-plugin-zotero-notes__warnings"></div><div class="siyuan-plugin-zotero-notes__losses"></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--cancel"></button><div class="fn__space"></div><button class="b3-button b3-button--text"></button></div>`,
             width: "720px",
             height: "620px"
         });
-        const textarea = dialog.element.querySelector("textarea");
-        textarea.value = markdown;
+        const render = dialog.element.querySelector(".siyuan-plugin-zotero-notes__render");
+        render.innerHTML = sanitized.html;
         const warnings = dialog.element.querySelector(".siyuan-plugin-zotero-notes__warnings");
         const messages = [...sanitized.warnings];
         if (!markdown.trim()) messages.unshift(this.t("emptyNote"));
         warnings.textContent = messages.join("\n");
+        const lossBox = dialog.element.querySelector(".siyuan-plugin-zotero-notes__losses");
+        lossBox.append(element("div", "siyuan-plugin-zotero-notes__losses-title", this.t("lossTitle")));
+        const losses = analyzeFormatLosses(rawMarkdown, converted?.html || "");
+        if (losses.length) {
+            const list = element("ul");
+            losses.forEach((key) => list.append(element("li", "", this.t(`loss${key}`))));
+            lossBox.append(list);
+        } else {
+            lossBox.append(element("div", "siyuan-plugin-zotero-notes__losses-none", this.t("lossNone")));
+        }
         const buttons = dialog.element.querySelectorAll("button");
         buttons[0].textContent = this.t("cancel");
         buttons[1].textContent = this.t("confirmSync");
@@ -827,6 +1278,8 @@ class ZoteroNotesPlugin extends Plugin {
             buttons[1].disabled = true;
             try {
                 await this.syncNote(item, binding, sanitized.html);
+                binding.noteHash = stableHash(markdown);
+                await this.saveBinding(binding);
                 dialog.destroy();
                 showMessage(this.t("syncSuccess"));
             } catch (error) {
@@ -987,5 +1440,14 @@ class ZoteroNotesPlugin extends Plugin {
         });
     }
 }
+
+ZoteroNotesPlugin.isDirectChildOfRoot = isDirectChildOfRoot;
+ZoteroNotesPlugin.collisionTitle = collisionTitle;
+ZoteroNotesPlugin.stableHash = stableHash;
+ZoteroNotesPlugin.diffObjectVersions = diffObjectVersions;
+ZoteroNotesPlugin.composeLibraryFromObjects = composeLibraryFromObjects;
+ZoteroNotesPlugin.cacheToLibrary = cacheToLibrary;
+ZoteroNotesPlugin.analyzeFormatLosses = analyzeFormatLosses;
+ZoteroNotesPlugin.prepareNoteMarkdown = prepareNoteMarkdown;
 
 module.exports = ZoteroNotesPlugin;

@@ -2,7 +2,7 @@
   "name": "siyuan-plugin-zotero-notes",
   "author": "PZL",
   "url": "https://github.com/bnoij/siyuan-plugin-zotero-notes",
-  "version": "0.1.2",
+  "version": "0.1.6",
   "minAppVersion": "3.7.0",
   "backends": ["windows", "linux", "darwin"],
   "frontends": ["desktop", "desktop-window"],

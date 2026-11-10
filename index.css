@@ -2,6 +2,11 @@
   color: var(--b3-theme-on-background);
   background: var(--b3-theme-background);
   min-height: 0;
+  height: 100%;
+}
+
+.siyuan-plugin-zotero-notes__dock {
+  background: var(--b3-theme-background);
 }
 
 .siyuan-plugin-zotero-notes__toolbar {
@@ -89,14 +94,14 @@
   background: var(--b3-list-hover);
 }
 
-.siyuan-plugin-zotero-notes__item-main {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
+.siyuan-plugin-zotero-notes__item-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .siyuan-plugin-zotero-notes__title {
-  flex: 1;
+  display: block;
+  width: 100%;
   min-width: 0;
   border: 0;
   padding: 0;
@@ -117,17 +122,40 @@
   white-space: nowrap;
 }
 
-.siyuan-plugin-zotero-notes__action {
-  flex: none;
-  min-height: 24px;
-  padding: 1px 5px;
-  font-size: 12px;
-}
-
 .siyuan-plugin-zotero-notes__item-tools {
   display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.siyuan-plugin-zotero-notes__action {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 4px;
-  margin-top: 4px;
+}
+
+.siyuan-plugin-zotero-notes__action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.siyuan-plugin-zotero-notes__action-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.siyuan-plugin-zotero-notes__action-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .siyuan-plugin-zotero-notes__empty {
@@ -136,12 +164,38 @@
   line-height: 1.6;
 }
 
-.siyuan-plugin-zotero-notes__preview {
-  width: 100%;
-  min-height: 320px;
-  resize: vertical;
-  font-family: var(--b3-font-family-code);
+.siyuan-plugin-zotero-notes__render {
+  max-height: 380px;
+  overflow: auto;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: var(--b3-theme-background);
+}
+
+.siyuan-plugin-zotero-notes__render img {
+  max-width: 100%;
+}
+
+.siyuan-plugin-zotero-notes__losses {
+  margin-top: 8px;
+  color: var(--b3-card-warning-color, #d89000);
   font-size: 12px;
+  line-height: 1.6;
+}
+
+.siyuan-plugin-zotero-notes__losses-title {
+  font-weight: 500;
+}
+
+.siyuan-plugin-zotero-notes__losses ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.siyuan-plugin-zotero-notes__losses-none {
+  color: var(--b3-theme-on-surface);
 }
 
 .siyuan-plugin-zotero-notes__warnings {

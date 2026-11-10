@@ -20,7 +20,13 @@ A SiYuan desktop plugin for browsing a Zotero 10+ library, creating paper notes 
 - Generates basic metadata, abstract, tags, and local/Zotero attachment links.
 - Refreshes paper metadata without changing `Note`.
 - Exports standard Markdown and converts it into a sanitized, editable Zotero rich-text note.
-- Shows a sync preview, updates the same child note on later syncs, and uses version preconditions to avoid overwriting conflicting edits.
+- Shows a rendered sync preview and lists formats that may be lost on upload; later syncs update the same child note, with version preconditions to avoid overwriting conflicting edits.
+- Limits the number of authors shown per item, replacing the rest with "et al." to keep long author lists from overflowing.
+- Offers separate auto-sync intervals for the library and for note uploads (in minutes, 0 disables), uploading only notes whose content changed.
+- Library refreshes are incremental by default: Zotero local versions are compared first, so only changed items are fetched and deletions are detected; a full-sync mode is available in the settings.
+- Paper documents carry `custom-zotero-*` attribute markers; bindings and automatic migration are resolved through SiYuan's database using those markers.
+- Migrates existing paper notes under a new root document automatically when the notebook or root document name changes, renaming same-title documents with an itemKey suffix.
+- Uses SiYuan theme variables for the Dock panel and buttons so it adapts to light, dark, and third-party themes.
 
 ## Requirements
 
@@ -44,15 +50,15 @@ The plugin is not yet listed in the SiYuan bazaar. Marketplace availability will
 ## Usage
 
 1. Open the plugin settings and select a destination notebook.
-2. Keep the default root document name `Zotero`, or choose another name.
+2. Keep the default root document name `Zotero`, or choose another name (existing notes migrate to the new root automatically).
 3. Open the **Zotero Notes** Dock and refresh the library. This imports only the library index.
 4. Click **Create note** on an item to create:
    - `Zotero/Paper title`: the plugin-managed metadata document;
    - `Zotero/Paper title/Note`: your writable note document.
-5. Write in `Note`, click **Sync Note** (`⇧`), review the Markdown preview, and confirm.
+5. Write in `Note`, click **Sync Note** in the button row below the item, review the Markdown preview, and confirm; or enable note auto-sync in the settings to upload changed notes automatically at the chosen interval.
 6. On the first sync, approve the write request in Zotero. Choose **Always Allow** if you want Zotero to remember the local authorization.
 
-Click an item title to open its document, `↻` to refresh metadata, or `Z` to select the item in Zotero.
+Each item has the same row of four framed buttons below it: **Create/Open note**, **Refresh metadata**, **Sync Note**, and **Select in Zotero**. The last two are disabled until a note exists; clicking the item title also opens its document. Clicking the plugin icon in the top bar opens the settings page.
 
 ## Synchronization and conversion
 
