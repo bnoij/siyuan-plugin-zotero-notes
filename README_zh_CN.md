@@ -88,6 +88,8 @@ Kimi Work 通过 `/api/file/putFile` 把任务写入插件私有目录 `data/sto
 
 后台导入复用 `createOrOpenExclusive({openTab:false})`，因此创建的 `Zotero/论文题名/Note` 与手工点击“新建笔记”完全同构。AI 精读写入 Note 后，仍可使用本插件的预览、回传和自动回传能力。
 
+每次 `ensure_papers` 都会先确认个人文库中存在 `daily` 分类；若不存在则自动创建。新导入的论文直接归入该分类，已有条目缺少该分类时通过 PATCH 补齐，不会新建重复条目，也不会移除条目的其他分类。
+
 ## 开发
 
 本项目直接交付可加载的 CommonJS `index.js`，无 npm 依赖、无需构建。运行文件位于仓库根目录。

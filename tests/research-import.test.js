@@ -50,9 +50,40 @@ test("ensurePapers reuses an arXiv match and creates only the missing item and a
         ["NEWITEM", "created"]
     ]);
     assert.equal(results[1].noteDocId, "note-NEWITEM");
-    assert.equal(writes.length, 2);
-    assert.equal(writes[0].options.body[0].itemType, "preprint");
-    assert.equal(writes[1].options.body[0].parentItem, "NEWITEM");
+    assert.equal(writes.length, 4);
+    assert.equal(writes[2].options.body[0].itemType, "preprint");
+    assert.equal(writes[3].options.body[0].parentItem, "NEWITEM");
+});
+
+test("ensurePapers creates daily collection and assigns new and existing papers", async () => {
+    const existing = remoteItem("EXISTING");
+    existing.data.extra = "arXiv: 2601.00001v2";
+    existing.data.collections = [];
+    const plugin = makePlugin();
+    plugin.library.items = [existing];
+    plugin.library.collections = [];
+    plugin.refreshLibrary = async () => {};
+    plugin.withWriteKey = async (operation) => operation("secret");
+    const writes = [];
+    plugin.zoteroRequest = async (path, options = {}) => {
+        writes.push({ path, options });
+        if (path === "/users/0/collections") {
+            return { data: { successful: { "0": { key: "DAILYKEY", data: options.body[0] } } }, response: new Headers() };
+        }
+        if (options.method === "PATCH") return { data: { ...existing.data, collections: options.body.collections }, response: new Headers() };
+        const key = options.body?.[0]?.itemType === "attachment" ? "ATTACH1" : "NEWITEM";
+        return { data: { successful: { "0": { key, data: { ...options.body[0], key } } } }, response: new Headers() };
+    };
+    plugin.createOrOpen = async (item) => ({ parentDocId: `parent-${item.key}`, noteDocId: `note-${item.key}`, path: "/Zotero/Paper" });
+
+    await plugin.ensurePapers([researchPaper("2601.00001v1"), researchPaper("2601.00002")]);
+
+    const collectionWrite = writes.find((write) => write.path === "/users/0/collections");
+    assert.deepEqual(collectionWrite.options.body, [{ name: "daily", parentCollection: false }]);
+    const patch = writes.find((write) => write.options.method === "PATCH");
+    assert.deepEqual(patch.options.body.collections, ["DAILYKEY"]);
+    const itemWrite = writes.find((write) => write.options.body?.[0]?.itemType === "preprint");
+    assert.deepEqual(itemWrite.options.body[0].collections, ["DAILYKEY"]);
 });
 
 test("createOrOpen supports background document creation and returns both IDs", async () => {

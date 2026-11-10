@@ -88,6 +88,8 @@ Kimi Work submits jobs through `/api/file/putFile` under `data/storage/petal/siy
 
 Background imports reuse `createOrOpenExclusive({openTab:false})`, producing the same `Zotero/Paper title/Note` structure as manual creation. AI analysis written into `Note` can therefore use the existing preview, sync, and auto-sync features.
 
+Every `ensure_papers` run first ensures that the personal library has a `daily` collection, creating it when absent. New items are assigned immediately; existing items missing the collection are updated with PATCH without duplication or removing their other collections.
+
 ## Development
 
 The plugin is directly loadable CommonJS with no npm dependencies and no build step. Runtime files are located at the repository root.

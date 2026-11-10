@@ -1421,23 +1421,60 @@ class ZoteroNotesPlugin extends Plugin {
         return data;
     }
 
-    async createResearchItem(paper) {
+    async ensureResearchCollection(name) {
+        const normalized = cleanText(name).toLocaleLowerCase();
+        const existing = (this.library.collections || []).find((collection) => cleanText(collection.data?.name).toLocaleLowerCase() === normalized);
+        if (existing) return existing.key;
+        const created = await this.withWriteKey((apiKey) => this.zoteroRequest(`${USER_PREFIX}/collections`, {
+            method: "POST",
+            apiKey,
+            headers: { "Zotero-Write-Token": createWriteToken() },
+            body: [{ name: cleanText(name), parentCollection: false }]
+        }));
+        const saved = created.data?.successful?.["0"];
+        const key = saved?.key || saved?.data?.key;
+        if (!key) throw new Error("Zotero did not return the created collection key.");
+        const collection = { key, data: { ...saved.data, key } };
+        this.library.collections.push(collection);
+        if (this.library.collectionObjects) this.library.collectionObjects[key] = collection;
+        return key;
+    }
+
+    async assignResearchCollection(item, collectionKey) {
+        const collections = Array.isArray(item.data?.collections) ? item.data.collections : [];
+        if (collections.includes(collectionKey)) return false;
+        const nextCollections = [...collections, collectionKey];
+        await this.withWriteKey((apiKey) => this.zoteroRequest(`${USER_PREFIX}/items/${item.key}`, {
+            method: "PATCH",
+            apiKey,
+            headers: { "If-Unmodified-Since-Version": String(item.data?.version ?? item.version) },
+            body: { collections: nextCollections }
+        }));
+        item.data.collections = nextCollections;
+        return true;
+    }
+
+    async createResearchItem(paper, collectionKey = "") {
         return this.withWriteKey(async (apiKey) => {
             let created;
+            const itemData = this.researchItemData(paper);
+            itemData.collections = collectionKey ? [collectionKey] : [];
             try {
                 created = await this.zoteroRequest(`${USER_PREFIX}/items`, {
                     method: "POST",
                     apiKey,
                     headers: { "Zotero-Write-Token": createWriteToken() },
-                    body: [this.researchItemData(paper)]
+                    body: [itemData]
                 });
             } catch (error) {
                 if (error.status !== 400 || !/itemtype|preprint/i.test(errorMessage(error))) throw error;
+                const fallbackData = this.researchItemData(paper, "journalArticle");
+                fallbackData.collections = collectionKey ? [collectionKey] : [];
                 created = await this.zoteroRequest(`${USER_PREFIX}/items`, {
                     method: "POST",
                     apiKey,
                     headers: { "Zotero-Write-Token": createWriteToken() },
-                    body: [this.researchItemData(paper, "journalArticle")]
+                    body: [fallbackData]
                 });
             }
             const saved = created.data?.successful?.["0"];
@@ -1472,6 +1509,7 @@ class ZoteroNotesPlugin extends Plugin {
         if (!papers.length) return [];
         if (!this.settings.notebook) throw new Error(this.t("selectNotebook"));
         await this.refreshLibrary(false);
+        const collectionKey = await this.ensureResearchCollection("daily");
         const results = [];
         let changed = false;
         for (const paper of papers) {
@@ -1480,13 +1518,14 @@ class ZoteroNotesPlugin extends Plugin {
                 let item = this.library.items.find((candidate) => this.researchItemMatches(candidate, paper));
                 let itemStatus = "existing";
                 if (!item) {
-                    item = await this.createResearchItem(paper);
+                    item = await this.createResearchItem(paper, collectionKey);
                     itemStatus = "created";
                     changed = true;
                     this.library.items.push(item);
                     if (this.library.itemObjects) this.library.itemObjects[item.key] = item;
                     await this.createResearchAttachment(item.key, paper);
                 }
+                if (await this.assignResearchCollection(item, collectionKey)) changed = true;
                 const documents = await this.createOrOpen(item, { openTab: false });
                 results.push({
                     arxivId: this.researchPaperIdentity(paper).arxiv,
