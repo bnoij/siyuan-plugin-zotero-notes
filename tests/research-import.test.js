@@ -182,7 +182,50 @@ test("writeDocuments creates a whitelisted document path without treating it as 
 
     assert.equal(results[0].status, "written");
     assert.equal(results[0].docId, "DAILYDOC");
-    assert.equal(creates[0].markdown, " completely custom markdown ");
+    assert.equal(creates[2].markdown, " completely custom markdown ");
+});
+
+test("writeDocuments creates missing parents before a nested document", async () => {
+    const plugin = makePlugin();
+    const creates = [];
+    plugin.request = async (url, data) => {
+        if (url === "/api/filetree/getIDsByHPath") return [];
+        if (url === "/api/filetree/createDocWithMd") {
+            creates.push(data);
+            return `DOC_${creates.length}`;
+        }
+        if (url === "/api/lute/copyStdMarkdown") return "# Daily\n\ncontent";
+        return null;
+    };
+
+    const results = await plugin.writeDocuments([{ path: "/Research/Daily/new", markdown: "content", expectedHash: null }]);
+
+    assert.equal(results[0].status, "written");
+    assert.deepEqual(creates.map((create) => create.path), ["/Research", "/Research/Daily", "/Research/Daily/new"]);
+    assert.equal(creates[0].markdown, "");
+    assert.equal(creates[1].markdown, "");
+    assert.equal(creates[2].markdown, "content");
+});
+
+test("writeDocuments retries while new document metadata is not ready", async () => {
+    const plugin = makePlugin();
+    plugin.researchReadRetryDelay = 0;
+    let reads = 0;
+    plugin.request = async (url, data) => {
+        if (url === "/api/filetree/getIDsByHPath") return [];
+        if (url === "/api/filetree/createDocWithMd") return "NEW_DOC";
+        if (url === "/api/lute/copyStdMarkdown") {
+            reads++;
+            if (reads === 1) throw new Error("document metadata is not ready");
+            return "# Daily\n\ncontent";
+        }
+        return null;
+    };
+
+    const results = await plugin.writeDocuments([{ path: "/Research/Daily/new", markdown: "content", expectedHash: null }]);
+
+    assert.equal(results[0].status, "written");
+    assert.equal(reads, 4);
 });
 
 test("writeDocuments rejects traversal and unapproved attributes", async () => {

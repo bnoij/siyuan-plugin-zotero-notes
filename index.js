@@ -1534,6 +1534,39 @@ class ZoteroNotesPlugin extends Plugin {
         }
     }
 
+    async readResearchDocument(docId) {
+        for (let attempt = 0; attempt < 5; attempt++) {
+            try {
+                return await this.request("/api/lute/copyStdMarkdown", { id: docId });
+            } catch (error) {
+                if (!/document metadata is not ready/i.test(errorMessage(error)) || attempt === 4) throw error;
+                await new Promise((resolve) => setTimeout(resolve, this.researchReadRetryDelay ?? 500));
+            }
+        }
+        throw new Error("Unable to read document metadata.");
+    }
+
+    async createResearchDocumentWithMd(path, markdown) {
+        const segments = this.researchDocumentPath(path).split("/").filter(Boolean);
+        let currentPath = "";
+        let docId = "";
+        for (let index = 0; index < segments.length; index++) {
+            currentPath += `/${segments[index]}`;
+            const ids = await this.request("/api/filetree/getIDsByHPath", { notebook: this.settings.notebook, path: currentPath });
+            if (ids?.length) {
+                docId = ids[0];
+                continue;
+            }
+            docId = await this.request("/api/filetree/createDocWithMd", {
+                notebook: this.settings.notebook,
+                path: currentPath,
+                markdown: index === segments.length - 1 ? String(markdown || "") : ""
+            });
+            if (index < segments.length - 1) await this.readResearchDocument(docId);
+        }
+        return docId;
+    }
+
     async writeDocuments(documents) {
         if (!Array.isArray(documents) || documents.length > 50) throw new Error("documents must be an array of at most 50 items.");
         documents.forEach((operation) => this.validateResearchWrite(operation));
@@ -1552,13 +1585,9 @@ class ZoteroNotesPlugin extends Plugin {
                         results.push({ path, status: "conflict", error: "Document does not exist." });
                         continue;
                     }
-                    docId = await this.request("/api/filetree/createDocWithMd", {
-                        notebook: this.settings.notebook,
-                        path,
-                        markdown: String(operation.markdown || "")
-                    });
+                    docId = await this.createResearchDocumentWithMd(path, operation.markdown);
                 } else {
-                    const current = await this.request("/api/lute/copyStdMarkdown", { id: docId });
+                    const current = await this.readResearchDocument(docId);
                     const currentHash = this.researchContentHash(current);
                     if (operation.onConflict !== "overwrite" && currentHash !== operation.expectedHash) {
                         results.push({ docId, path, status: "conflict", contentHash: currentHash });
@@ -1570,7 +1599,7 @@ class ZoteroNotesPlugin extends Plugin {
                         id: docId
                     });
                 }
-                const exported = await this.request("/api/lute/copyStdMarkdown", { id: docId });
+                const exported = await this.readResearchDocument(docId);
                 const contentHash = this.researchContentHash(exported);
                 await this.request("/api/attr/setBlockAttrs", {
                     id: docId,
