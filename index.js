@@ -25,6 +25,12 @@ const DEFAULT_SETTINGS = {
     syncMode: "incremental",
     workflowQueueEnabled: true,
     noteTemplate: "# {{title}}\n\n{{if authors}}**作者：** {{authors}}\n\n{{end}}{{if year}}**年份：** {{year}}\n\n{{end}}{{if DOI}}**DOI：** {{DOI}}\n\n{{end}}{{if abstract}}## 摘要\n\n{{abstract}}\n\n{{end}}{{range tags}}- {{.}}\n{{end}}",
+    pdf2zhPath: "pdf2zh",
+    translationSource: "en",
+    translationTarget: "zh",
+    translationConcurrency: 1,
+    translationDualConcurrency: 4,
+    translationSecretNames: [],
     citationStyle: "ieee",
     citationForm: "numeric"
 };
@@ -330,6 +336,7 @@ class ZoteroNotesPlugin extends Plugin {
         this.dockElement = null;
         this.librarySyncTimer = null;
         this.noteSyncTimer = null;
+        this.initTranslationState();
         this.addIcons(PLUGIN_ICONS);
         const [settings, cache, bindings, writeKeys] = await Promise.all([
             this.loadData("settings.json"),
@@ -370,6 +377,7 @@ class ZoteroNotesPlugin extends Plugin {
                 menu.addItem({ icon: "iconLink", label: this.t("insertCitation"), click: () => this.openCitationSelector() });
                 menu.addItem({ icon: "iconDownload", label: this.t("exportContent"), click: () => this.openExportDialog() });
                 menu.addItem({ icon: "iconDatabase", label: "文献数据库 / Paper database", click: () => this.enqueue(() => this.openPaperDatabase()) });
+                menu.addItem({ icon: "iconList", label: "统一多页引用 / Connected citations", click: () => this.enqueue(() => this.syncCurrentCitationTree()) });
                 menu.addItem({ icon: "iconUpload", label: "导入文献 / Import papers", click: () => this.openImportDialog() });
                 menu.addItem({ icon: "iconSearch", label: "检索 / PDF 导入", click: () => this.openAdvancedImportDialog() });
                 menu.addItem({ icon: "iconSettings", label: this.t("settings"), click: () => this.openSetting() });
@@ -386,7 +394,81 @@ class ZoteroNotesPlugin extends Plugin {
             hotkey: "",
             callback: () => this.openExportDialog()
         });
+        this.registerAgentActions();
         this.startAutoSync();
+    }
+
+    registerAgentActions() {
+        this.addAgentAction({
+            name: "ensure_papers",
+            description: "Ensure Zotero items and linked SiYuan paper documents exist. Args: {papers:[{title,doi,arxiv_id,creators,tags,url}]}",
+            handler: async (args) => {
+                if (!Array.isArray(args?.papers) || args.papers.length > 50) return { error: "papers must be an array of at most 50 items" };
+                try {
+                    const results = await this.ensurePapers(args.papers);
+                    return { result: JSON.stringify(results) };
+                } catch (error) {
+                    return { error: errorMessage(error) };
+                }
+            }
+        });
+        this.addAgentAction({
+            name: "write_documents",
+            description: "Write Markdown documents with conflict protection. Args: {documents:[{path,content,expectedHash,onConflict}]}",
+            handler: async (args) => {
+                if (!Array.isArray(args?.documents) || args.documents.length > 50) return { error: "documents must be an array of at most 50 items" };
+                for (const document of args.documents) {
+                    if (typeof document?.path !== "string" || typeof document?.content !== "string" || (document.onConflict && !["report", "overwrite"].includes(document.onConflict))) {
+                        return { error: "Invalid document path or conflict policy / 文档路径或冲突策略无效" };
+                    }
+                }
+                try {
+                    return { result: JSON.stringify(await this.writeDocuments(args.documents)) };
+                } catch (error) {
+                    return { error: errorMessage(error) };
+                }
+            }
+        });
+        this.addAgentAction({
+            name: "refresh_library",
+            description: "Refresh the Zotero library cache and return the item count",
+            handler: async () => {
+                try {
+                    await this.refreshLibrary(false);
+                    return { result: `${this.library.items.length} items` };
+                } catch (error) {
+                    return { error: errorMessage(error) };
+                }
+            }
+        });
+        this.addAgentAction({
+            name: "translate_paper",
+            description: "Translate a paper PDF using an existing pdf2zh executable. Args: {itemKey,mode:'mono'|'dual'}",
+            handler: async (args) => {
+                if (typeof args?.itemKey !== "string" || !["mono", "dual"].includes(args.mode)) return { error: "itemKey and mode are required" };
+                try {
+                    this.initTranslationState();
+                    await this.queueTranslations([args.itemKey], args.mode);
+                    await this.waitForTranslationIdle();
+                    const job = this.translationJobs.get(args.itemKey);
+                    if (job?.status === "error") return { error: job.error || "pdf2zh 翻译失败" };
+                    if (job?.status === "cancelled") return { error: `翻译 ${args.itemKey} 已取消` };
+                    return { result: `翻译 ${args.itemKey}: ${job?.status || "unknown"}` };
+                } catch (error) {
+                    return { error: errorMessage(error) };
+                }
+            }
+        });
+        this.eventBus.on("GetFromPool", (event) => {
+            const items = this.library.items.slice(0, 200).map((item) => ({ key: item.key, title: itemTitle(item), authors: itemAuthors(item), year: itemYear(item) }));
+            event.detail.triggerFn("total", this.library.items.length);
+            event.detail.triggerFn("all", items);
+        });
+        this.eventBus.on("Refresh", async (event) => {
+            if (event.detail.type === "database") return this.refreshLibrary(false);
+            const item = this.library.items[0];
+            if (item) return this.refreshMetadata(item);
+        });
     }
 
     async onLayoutReady() {
@@ -425,6 +507,11 @@ class ZoteroNotesPlugin extends Plugin {
             this.settingControls.citationStyleSelect.value = this.settings.citationStyle;
             this.settingControls.citationFormSelect.value = this.settings.citationForm;
             this.settingControls.noteTemplateInput.value = this.settings.noteTemplate;
+            this.settingControls.pdf2zhPathInput.value = this.settings.pdf2zhPath;
+            this.settingControls.translationSourceInput.value = this.settings.translationSource;
+            this.settingControls.translationTargetInput.value = this.settings.translationTarget;
+            this.settingControls.translationConcurrencyInput.value = this.settings.translationConcurrency;
+            this.settingControls.translationSecretNamesInput.value = this.settings.translationSecretNames.join(", ");
         }
         this.startAutoSync();
         this.stopWorkflowQueue();
@@ -437,6 +524,9 @@ class ZoteroNotesPlugin extends Plugin {
         this.abortController.abort();
         this.stopAutoSync();
         this.stopWorkflowQueue();
+        this.cancelTranslations();
+        this.eventBus?.off?.("GetFromPool");
+        this.eventBus?.off?.("Refresh");
         this.dockElement = null;
     }
 
@@ -450,6 +540,10 @@ class ZoteroNotesPlugin extends Plugin {
         merged.noteSyncInterval = clampInteger(merged.noteSyncInterval, 0, 1440, DEFAULT_SETTINGS.noteSyncInterval);
         merged.syncMode = merged.syncMode === "full" ? "full" : "incremental";
         merged.workflowQueueEnabled = merged.workflowQueueEnabled !== false;
+        merged.translationConcurrency = clampInteger(merged.translationConcurrency, 1, 8, DEFAULT_SETTINGS.translationConcurrency);
+        merged.translationDualConcurrency = clampInteger(merged.translationDualConcurrency, 1, 128, DEFAULT_SETTINGS.translationDualConcurrency);
+        const secretNames = Array.isArray(merged.translationSecretNames) ? merged.translationSecretNames : String(merged.translationSecretNames || "").split(",");
+        merged.translationSecretNames = [...new Set(secretNames.map((name) => String(name).trim()).filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))];
         return merged;
     }
 
@@ -633,11 +727,12 @@ class ZoteroNotesPlugin extends Plugin {
             headers["Zotero-Server-ID"] = options.serverID || this.library.serverID;
         }
         if (options.apiKey) headers["Zotero-API-Key"] = options.apiKey;
-        if (options.body !== undefined) headers["Content-Type"] = "application/json";
-        const response = await fetch(`${ZOTERO_API}${path}`, {
+        if (options.body !== undefined && options.rawBody === undefined) headers["Content-Type"] = "application/json";
+        const endpoint = /^https?:\/\//i.test(path) ? path : `${ZOTERO_API}${path}`;
+        const response = await fetch(endpoint, {
             method: options.method || "GET",
             headers,
-            body: options.body === undefined ? undefined : JSON.stringify(options.body),
+            body: options.rawBody !== undefined ? options.rawBody : options.body === undefined ? undefined : JSON.stringify(options.body),
             signal: options.signal || this.abortController.signal
         });
         const serverID = response.headers.get("Zotero-Server-ID") || "";
@@ -839,7 +934,26 @@ class ZoteroNotesPlugin extends Plugin {
         noteTemplateInput.className = "b3-text-field fn__block";
         noteTemplateInput.rows = 6;
         noteTemplateInput.value = this.settings.noteTemplate;
-        this.settingControls = { notebookSelect, rootInput, autoImport, authorLimitInput, librarySyncInput, noteSyncInput, syncModeSelect, workflowQueueEnabled, citationStyleSelect, citationFormSelect, noteTemplateInput };
+        const pdf2zhPathInput = document.createElement("input");
+        pdf2zhPathInput.className = "b3-text-field fn__block";
+        pdf2zhPathInput.value = this.settings.pdf2zhPath;
+        const translationSourceInput = document.createElement("input");
+        translationSourceInput.className = "b3-text-field fn__block";
+        translationSourceInput.value = this.settings.translationSource;
+        const translationTargetInput = document.createElement("input");
+        translationTargetInput.className = "b3-text-field fn__block";
+        translationTargetInput.value = this.settings.translationTarget;
+        const translationConcurrencyInput = document.createElement("input");
+        translationConcurrencyInput.type = "number";
+        translationConcurrencyInput.min = "1";
+        translationConcurrencyInput.max = "8";
+        translationConcurrencyInput.className = "b3-text-field fn__block";
+        translationConcurrencyInput.value = this.settings.translationConcurrency;
+        const translationSecretNamesInput = document.createElement("input");
+        translationSecretNamesInput.className = "b3-text-field fn__block";
+        translationSecretNamesInput.placeholder = "OPENAI_API_KEY, GEMINI_API_KEY";
+        translationSecretNamesInput.value = this.settings.translationSecretNames.join(", ");
+        this.settingControls = { notebookSelect, rootInput, autoImport, authorLimitInput, librarySyncInput, noteSyncInput, syncModeSelect, workflowQueueEnabled, citationStyleSelect, citationFormSelect, noteTemplateInput, pdf2zhPathInput, translationSourceInput, translationTargetInput, translationConcurrencyInput, translationSecretNamesInput };
         const save = async () => {
             const previous = { notebook: this.settings.notebook, rootName: this.settings.rootName };
             this.settings = this.normalizeSettings({
@@ -854,7 +968,12 @@ class ZoteroNotesPlugin extends Plugin {
                 workflowQueueEnabled: workflowQueueEnabled.checked,
                 citationStyle: citationStyleSelect.value,
                 citationForm: citationFormSelect.value,
-                noteTemplate: noteTemplateInput.value
+                noteTemplate: noteTemplateInput.value,
+                pdf2zhPath: pdf2zhPathInput.value,
+                translationSource: translationSourceInput.value,
+                translationTarget: translationTargetInput.value,
+                translationConcurrency: translationConcurrencyInput.value,
+                translationSecretNames: translationSecretNamesInput.value
             });
             authorLimitInput.value = this.settings.authorLimit;
             librarySyncInput.value = this.settings.librarySyncInterval;
@@ -921,6 +1040,11 @@ class ZoteroNotesPlugin extends Plugin {
             description: "仅支持 {{title}}、{{authors}}、{{year}}、{{journal}}、{{DOI}}、{{abstract}}、{{tags}}、{{noteLink}}、{{itemKey}} 及 if/range 控制结构；只用于新建 Note。",
             actionElement: noteTemplateInput
         });
+        this.setting.addItem({ title: "pdf2zh 可执行文件", actionElement: pdf2zhPathInput });
+        this.setting.addItem({ title: "翻译源语言", actionElement: translationSourceInput });
+        this.setting.addItem({ title: "翻译目标语言", actionElement: translationTargetInput });
+        this.setting.addItem({ title: "同时翻译篇数", description: "1–8 篇，批量任务按此并发运行", actionElement: translationConcurrencyInput });
+        this.setting.addItem({ title: "翻译密钥名称", description: "逗号分隔的环境变量名；密钥值只从思源「设置 → 密钥和变量」读取，不保存在插件设置中。", actionElement: translationSecretNamesInput });
         const testButton = element("button", "b3-button b3-button--outline", this.t("testConnection"));
         testButton.addEventListener("click", async () => {
             testButton.disabled = true;
@@ -948,6 +1072,11 @@ class ZoteroNotesPlugin extends Plugin {
         citationStyleSelect.addEventListener("change", save);
         citationFormSelect.addEventListener("change", save);
         noteTemplateInput.addEventListener("change", save);
+        pdf2zhPathInput.addEventListener("change", save);
+        translationSourceInput.addEventListener("change", save);
+        translationTargetInput.addEventListener("change", save);
+        translationConcurrencyInput.addEventListener("change", save);
+        translationSecretNamesInput.addEventListener("change", save);
     }
 
     async loadNotebooks(select) {
@@ -1127,6 +1256,13 @@ class ZoteroNotesPlugin extends Plugin {
                 title: this.t("importAnnotations"),
                 disabled: !binding?.noteDocId,
                 onClick: () => this.enqueue(() => this.importAnnotations(item))
+            }),
+            this.itemButton({
+                icon: "#zoteroNotesIconRefresh",
+                label: "翻译 / Translate",
+                title: "使用 pdf2zh 翻译 PDF",
+                disabled: !binding?.noteDocId,
+                onClick: () => this.openTranslationDialog(item)
             }),
             this.itemButton({
                 icon: "#zoteroNotesIconZotero",
@@ -1836,7 +1972,15 @@ class ZoteroNotesPlugin extends Plugin {
         return this.withExclusiveLock(`${PLUGIN_NAME}:bibliography:${docId}`, async () => {
             const attrs = await this.request("/api/attr/getBlockAttrs", { id: docId });
             const registry = this.citationRegistryFromAttrs(attrs);
-            if (!registry.length) return;
+            if (!registry.length) {
+                const rows = await this.request("/api/query/sql", {
+                    stmt: `SELECT a.block_id FROM attributes a JOIN blocks b ON a.block_id = b.id WHERE a.name = '${ATTR_BIB}' AND b.root_id = '${docId}'`
+                });
+                for (const row of Array.isArray(rows) ? rows : []) {
+                    await this.request("/api/block/deleteBlock", { id: row.block_id });
+                }
+                return;
+            }
             const style = attrs[ATTR_STYLE] || this.settings.citationStyle;
             const entries = await this.formatBibliography(registry.map((entry) => entry.key), style);
             const markdown = `{{{row\n# 参考文献\n\n${entries.map((entry) => `- ${markdownText(entry.text)}`).join("\n")}\n}}}`;
@@ -1853,6 +1997,84 @@ class ZoteroNotesPlugin extends Plugin {
             if (!blockId) throw new Error("Unable to locate bibliography block");
             await this.request("/api/attr/setBlockAttrs", { id: blockId, attrs: { [ATTR_BIB]: "true" } });
         });
+    }
+
+    async refreshCitationTree(rootDocId) {
+        return this.withExclusiveLock(`${PLUGIN_NAME}:citation-tree:${rootDocId}`, async () => {
+            const pathInfo = await this.request("/api/filetree/getPathByID", { id: rootDocId });
+            const rootHPath = await this.request("/api/filetree/getHPathByID", { id: rootDocId });
+            const referencePath = `${rootHPath}/Reference`;
+            const escapedRootHPath = rootHPath.replace(/'/g, "''").replace(/[%_]/g, "\\$&");
+            const descendants = await this.request("/api/query/sql", {
+                stmt: `SELECT id, hpath FROM blocks WHERE type = 'd' AND hpath LIKE '${escapedRootHPath}/%' ESCAPE '\\' ORDER BY hpath`
+            });
+            const documents = [{ id: rootDocId, hpath: rootHPath }, ...(descendants || []).filter((document) => document.hpath !== referencePath)];
+            const allEntries = [];
+            let style = this.settings.citationStyle;
+            for (const document of documents) {
+                const attrs = await this.request("/api/attr/getBlockAttrs", { id: document.id });
+                const entries = this.citationRegistryFromAttrs(attrs).map((entry, index) => ({ ...entry, number: allEntries.length + index + 1 }));
+                allEntries.push(...entries);
+                style = attrs[ATTR_STYLE] || style;
+                await this.request("/api/attr/setBlockAttrs", {
+                    id: document.id,
+                    attrs: { [ATTR_CITES]: JSON.stringify(entries), [ATTR_STYLE]: style }
+                });
+                const oldBibs = await this.request("/api/query/sql", {
+                    stmt: `SELECT a.block_id FROM attributes a JOIN blocks b ON a.block_id = b.id WHERE a.name = '${ATTR_BIB}' AND b.root_id = '${document.id}'`
+                });
+                for (const row of oldBibs || []) {
+                    await this.request("/api/block/deleteBlock", { id: row.block_id });
+                }
+            }
+            const registry = this.mergeCitationEntries([], allEntries);
+            const existing = await this.request("/api/filetree/getIDsByHPath", { notebook: pathInfo.notebook, path: referencePath });
+            const referenceId = existing?.[0] || await this.request("/api/filetree/createDocWithMd", {
+                notebook: pathInfo.notebook,
+                path: referencePath,
+                markdown: ""
+            });
+            await this.request("/api/attr/setBlockAttrs", {
+                id: referenceId,
+                attrs: { [ATTR_CITES]: JSON.stringify(registry), [ATTR_STYLE]: style }
+            });
+            await this.refreshBibliography(referenceId);
+            return registry.map((entry) => entry.key);
+        });
+    }
+
+    async syncConnectedCollection(rootDocId) {
+        await this.refreshLibrary(false);
+        const itemKeys = await this.refreshCitationTree(rootDocId);
+        const synchronize = async () => {
+            const collectionKey = await this.ensureResearchCollection(`【【Connected Documents】】→ ${rootDocId}`);
+            const missingItemKeys = [];
+            for (const key of new Set(itemKeys)) {
+                const item = this.library.items.find((candidate) => candidate.key === key);
+                if (!item) missingItemKeys.push(key);
+                else await this.assignResearchCollection(item, collectionKey);
+            }
+            if (missingItemKeys.length) {
+                const error = new Error(`以下引用在 Zotero 文库中不存在：${missingItemKeys.join(", ")}`);
+                error.missingItemKeys = missingItemKeys;
+                throw error;
+            }
+            return collectionKey;
+        };
+        try {
+            return await synchronize();
+        } catch (error) {
+            if (error.status !== 412) throw error;
+            await this.refreshLibrary(false);
+            return synchronize();
+        }
+    }
+
+    async syncCurrentCitationTree() {
+        const editor = getActiveEditor();
+        const rootDocId = editor?.protyle?.block?.rootID;
+        if (!rootDocId) throw new Error("请先打开顶层文档");
+        await this.syncConnectedCollection(rootDocId);
     }
 
     citationMarkdown(items, form = this.settings.citationForm, registry = []) {
@@ -2529,6 +2751,280 @@ class ZoteroNotesPlugin extends Plugin {
                 const result = await this.importPapers([pending], { duplicateAction: duplicate.value });
                 preview.textContent = `已导入 ${result.imported} 篇，跳过重复 ${result.skipped} 篇`;
             });
+        });
+    }
+
+    nodeRequire(name) {
+        const requireFn = globalThis.window?.require || globalThis.require || require;
+        if (typeof requireFn !== "function") throw new Error(`Node 模块不可用：${name}`);
+        return requireFn(name);
+    }
+
+    async translationEnvironment(overrides = {}) {
+        const names = ["PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP", "LANG", "LC_ALL"];
+        const env = {};
+        names.forEach((name) => {
+            if (process.env[name]) env[name] = process.env[name];
+        });
+        Object.entries(overrides).forEach(([name, value]) => {
+            if (!/(?:key|secret|token|password|passwd|credential)/i.test(name)) env[name] = value;
+        });
+        const configuredNames = Array.isArray(this.settings.translationSecretNames)
+            ? this.settings.translationSecretNames
+            : String(this.settings.translationSecretNames || "").split(",");
+        for (const name of new Set(configuredNames.map((value) => String(value).trim()).filter((value) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(value)))) {
+            if (typeof this.getSecret !== "function") throw new Error("思源密钥接口不可用 / SiYuan secret API unavailable");
+            const value = await this.getSecret(name);
+            if (typeof value === "string" && value) env[name] = value;
+        }
+        return env;
+    }
+
+    async defaultProcessRunner(executable, args, options = {}) {
+        const { spawn } = this.nodeRequire("child_process");
+        return new Promise((resolve, reject) => {
+            const child = spawn(executable, args, {
+                env: options.env,
+                windowsHide: true,
+                signal: options.signal
+            });
+            let stdout = "";
+            let stderr = "";
+            let settled = false;
+            const append = (target, value, limit = 1024 * 1024) => target.length < limit ? value.slice(0, limit - target.length) : "";
+            child.stdout.on("data", (data) => { stdout += append(stdout, data.toString()); });
+            child.stderr.on("data", (data) => { stderr += append(stderr, data.toString()); });
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                child.kill();
+                const error = new Error(`pdf2zh 进程超时 / Process timeout after ${options.timeout || 30 * 60 * 1000} ms`);
+                error.code = "ETIMEDOUT";
+                reject(error);
+            }, options.timeout || 30 * 60 * 1000);
+            timer.unref?.();
+            child.on("error", (error) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                reject(error);
+            });
+            child.on("close", (code) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                resolve({ code, stdout, stderr });
+            });
+        });
+    }
+
+    async runPdf2zh(options) {
+        const mode = options.mode === "dual" ? "dual" : "mono";
+        const runner = this.processRunner || this.defaultProcessRunner.bind(this);
+        const executable = this.settings.pdf2zhPath || "pdf2zh";
+        const args = [
+            options.input,
+            "--output", options.outputDir,
+            "--li", this.settings.translationSource || "en",
+            "--lo", this.settings.translationTarget || "zh",
+            "-t", String(this.settings.translationDualConcurrency || 4),
+            mode === "mono" ? "--no-dual" : "--no-mono"
+        ];
+        const result = await runner(executable, args, {
+            env: await this.translationEnvironment(options.env),
+            signal: options.signal || this.abortController.signal,
+            timeout: options.timeout
+        });
+        if (result.code !== 0) throw new Error(`pdf2zh 退出码 ${result.code}：${result.stderr || result.stdout || "未知错误"}`);
+        const path = this.nodeRequire("path");
+        const base = path.basename(options.input, path.extname(options.input));
+        return { outputPath: path.join(options.outputDir, `${base}-${mode}.pdf`), mode };
+    }
+
+    async uploadZoteroFile(itemKey, bytes, filename, options = {}) {
+        const digest = this.nodeRequire("crypto").createHash("md5").update(bytes).digest();
+        const md5 = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+        return this.withWriteKey(async (apiKey) => {
+            const initialized = await this.zoteroRequest(`${USER_PREFIX}/items/${itemKey}/file?md5=${md5}&filename=${encodeURIComponent(filename)}&filesize=${bytes.byteLength}&mtime=${Date.now()}`, {
+                method: "POST",
+                apiKey,
+                headers: { "If-None-Match": "*" },
+                signal: options.signal
+            });
+            if (initialized.data?.exists) return { key: itemKey, exists: true };
+            const uploadURL = initialized.data?.url;
+            if (!uploadURL) throw new Error("Zotero 未返回附件上传地址");
+            await this.zoteroRequest(uploadURL, {
+                method: "POST",
+                rawBody: bytes,
+                headers: { "Content-Type": "application/octet-stream" },
+                signal: options.signal
+            });
+            await this.zoteroRequest(`${USER_PREFIX}/items/${itemKey}/file?upload=${encodeURIComponent(initialized.data.uploadKey)}`, {
+                method: "POST",
+                apiKey,
+                headers: { "If-None-Match": "*" },
+                signal: options.signal
+            });
+            return { key: itemKey, exists: false };
+        });
+    }
+
+    async translationAttachment(item, mode = "mono", options = {}) {
+        const attachment = (item.attachments || []).find((candidate) => candidate.data?.contentType === "application/pdf");
+        if (!attachment) throw new Error("没有可翻译的 PDF 原稿");
+        const result = await this.zoteroRequest(`${USER_PREFIX}/items/${attachment.key}/file/view/url`, { signal: options.signal });
+        const input = decodeURIComponent(new URL(result.data).pathname).replace(/^\/+/, "");
+        const outputDir = this.nodeRequire("path").dirname(input);
+        const translated = await this.runPdf2zh({ input, outputDir, mode, signal: options.signal });
+        const fs = this.nodeRequire("fs");
+        const bytes = new Uint8Array(fs.readFileSync(translated.outputPath));
+        const filename = this.nodeRequire("path").basename(translated.outputPath);
+        const created = await this.withWriteKey((apiKey) => this.zoteroRequest(`${USER_PREFIX}/items`, {
+            method: "POST",
+            apiKey,
+            headers: { "Zotero-Write-Token": createWriteToken() },
+            body: [{
+                itemType: "attachment",
+                linkMode: "imported_file",
+                parentItem: item.key,
+                title: filename,
+                contentType: "application/pdf",
+                tags: [],
+                collections: []
+            }],
+            signal: options.signal
+        }));
+        const createdEntry = created.data?.successful?.["0"];
+        const key = createdEntry?.key || createdEntry?.data?.key;
+        if (!key) throw new Error("译稿附件创建失败");
+        try {
+            return await this.uploadZoteroFile(key, bytes, filename, { signal: options.signal });
+        } catch (error) {
+            try {
+                await this.withWriteKey(async (apiKey) => {
+                    let version = createdEntry?.version ?? createdEntry?.data?.version;
+                    if (version === undefined) {
+                        const current = await this.zoteroRequest(`${USER_PREFIX}/items/${key}`, { apiKey });
+                        version = current.data?.data?.version ?? current.data?.version;
+                    }
+                    await this.zoteroRequest(`${USER_PREFIX}/items/${key}`, {
+                        method: "DELETE",
+                        apiKey,
+                        headers: { "If-Unmodified-Since-Version": String(version) }
+                    });
+                });
+            } catch {}
+            throw error;
+        }
+    }
+
+    initTranslationState() {
+        if (this.translationJobs) return;
+        this.translationJobs = new Map();
+        this.translationControllers = new Map();
+        this.translationQueue = [];
+        this.translationActive = 0;
+        this.translationCancelled = false;
+    }
+
+    async queueTranslations(itemKeys, mode = "mono") {
+        this.initTranslationState();
+        this.translationCancelled = false;
+        const items = [...new Set(itemKeys)].map((key) => this.library.items.find((item) => item.key === key)).filter(Boolean);
+        for (const item of items) {
+            const status = this.translationJobs.get(item.key)?.status;
+            if (status === "running" || status === "pending") continue;
+            this.translationQueue.push(item);
+            this.translationJobs.set(item.key, { status: "pending", mode, error: "" });
+        }
+        this.processTranslationQueue();
+    }
+
+    processTranslationQueue() {
+        const concurrency = Math.max(1, Math.min(8, Number(this.settings.translationConcurrency) || 1));
+        while (!this.translationCancelled && this.translationActive < concurrency && this.translationQueue.length) {
+            const item = this.translationQueue.shift();
+            const controller = new AbortController();
+            this.translationControllers.set(item.key, controller);
+            this.translationActive++;
+            this.translationJobs.set(item.key, { status: "running", mode: this.translationJobs.get(item.key)?.mode || "mono", error: "" });
+            this.runTranslationJob(item, controller).finally(() => {
+                this.translationActive--;
+                this.translationControllers.delete(item.key);
+                this.processTranslationQueue();
+            });
+        }
+        this.renderTranslationStatus();
+    }
+
+    async runTranslationJob(item, controller) {
+        try {
+            const result = await this.translationAttachment(item, this.translationJobs.get(item.key)?.mode || "mono", { signal: controller.signal });
+            this.translationJobs.set(item.key, { status: controller.signal.aborted ? "cancelled" : "completed", mode: this.translationJobs.get(item.key)?.mode || "mono", error: "", result });
+        } catch (error) {
+            const cancelled = controller.signal.aborted || error.name === "AbortError";
+            this.translationJobs.set(item.key, { status: cancelled ? "cancelled" : "error", mode: this.translationJobs.get(item.key)?.mode || "mono", error: errorMessage(error) });
+        }
+    }
+
+    async waitForTranslationIdle(timeoutMs = 31 * 60 * 1000) {
+        const deadline = Date.now() + timeoutMs;
+        while (this.translationActive > 0 || this.translationQueue.length) {
+            if (Date.now() >= deadline) throw new Error("等待翻译队列结束超时 / Translation queue wait timeout");
+            await new Promise((resolve) => {
+                const timer = setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now())));
+                timer.unref?.();
+            });
+        }
+    }
+
+    cancelTranslation(itemKey) {
+        this.initTranslationState();
+        const job = this.translationJobs.get(itemKey);
+        if (job && ["running", "pending"].includes(job.status)) {
+            this.translationJobs.set(itemKey, { ...job, status: "cancelled", error: "" });
+        }
+        this.translationQueue = this.translationQueue.filter((item) => item.key !== itemKey);
+        this.translationControllers.get(itemKey)?.abort();
+        this.renderTranslationStatus();
+    }
+
+    cancelTranslations() {
+        this.initTranslationState();
+        this.translationCancelled = true;
+        for (const item of this.translationQueue) {
+            this.translationJobs.set(item.key, { status: "cancelled", mode: this.translationJobs.get(item.key)?.mode || "mono", error: "" });
+        }
+        this.translationQueue = [];
+        for (const controller of this.translationControllers.values()) controller.abort();
+        this.renderTranslationStatus();
+    }
+
+    renderTranslationStatus() {
+        if (!this.translationJobs) return;
+        const values = [...this.translationJobs.values()];
+        const running = values.filter((job) => job.status === "running").length;
+        const completed = values.filter((job) => job.status === "completed").length;
+        const failed = values.filter((job) => job.status === "error").length;
+        const cancelled = values.filter((job) => job.status === "cancelled").length;
+        this.renderStatus(`翻译：运行 ${running}，完成 ${completed}，失败 ${failed}，取消 ${cancelled}`);
+    }
+
+    openTranslationDialog(item) {
+        const dialog = new Dialog({
+            title: `翻译 / ${itemTitle(item)}`,
+            content: `<div class="b3-dialog__content"><select class="b3-select fn__block" data-translation-mode><option value="mono">单语译稿</option><option value="dual">双语对照译稿</option></select><p>使用 pdf2zh 创建独立译稿附件，不覆盖原始 PDF。</p></div><div class="b3-dialog__action"><button class="b3-button b3-button--cancel" data-translation-cancel>取消此文献翻译</button><button class="b3-button b3-button--text" data-translation-start>开始翻译</button></div>`,
+            width: "480px"
+        });
+        const mode = dialog.element.querySelector("[data-translation-mode]");
+        dialog.element.querySelector("[data-translation-start]").addEventListener("click", () => {
+            this.enqueue(() => this.queueTranslations([item.key], mode.value));
+            dialog.destroy();
+        });
+        dialog.element.querySelector("[data-translation-cancel]").addEventListener("click", () => {
+            this.cancelTranslation(item.key);
+            dialog.destroy();
         });
     }
 

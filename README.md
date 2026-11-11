@@ -34,6 +34,9 @@ A SiYuan desktop plugin for browsing a Zotero 10+ library, creating paper notes 
 - Maps papers to native SiYuan database rows bound by paper document ID without duplicate rows on repeat sync.
 - Imports CSL-JSON and BibTeX files, and retrieves metadata from DOI, arXiv, ISBN, PMID/PMCID, and URLs.
 - Extracts XMP and limited text streams from local PDFs, showing metadata source and confidence; filenames are only low-confidence fallbacks.
+- Uses an existing pdf2zh installation to create mono or dual PDF attachments while preserving originals, with bounded concurrency, per-item cancellation, failure cleanup, and process timeouts.
+- Renumbers citations across a document tree, builds a managed `Reference` child document, and assigns cited papers to a stable Connected Documents collection.
+- Exposes `ensure_papers`, `write_documents`, `refresh_library`, and `translate_paper` Agent Actions plus bounded eventBus library payloads.
 
 ## Requirements
 
@@ -83,9 +86,21 @@ Write personal content in `Note`; the paper document is maintained by the plugin
 
 ## Privacy and data safety
 
-Zotero traffic stays on `127.0.0.1:23119`. Settings, the library cache, document bindings, and remembered local write keys use SiYuan's private plugin storage. They are excluded from the release package and are not logged. Uninstalling the plugin does not delete paper documents or Zotero items.
+Zotero traffic stays on `127.0.0.1:23119`. Settings, the library cache, document bindings, and remembered local write keys use SiYuan's private plugin storage. They are excluded from the release package and are not logged. Uninstalling the plugin does not delete paper documents or Zotero items. Your pdf2zh model provider is configured separately and may receive PDF content; review its privacy policy before translating.
 
 Even with these safeguards, maintain independent backups while the plugin is in internal testing.
+
+## Translation and advanced workflows (0.5.0)
+
+Translation is optional. Install and configure a compatible pdf2zh yourself, then set its executable path, source/target languages, and 1–8 concurrent jobs in the plugin settings. The plugin does not install pdf2zh or deploy a model service. Items with paper notes offer **Translate** with mono or dual output. Translated files are written beside the source PDF and uploaded as new attachments; the original PDF and `Note` are never overwritten, and the same item cannot run twice concurrently.
+
+When a model secret is needed, store it in SiYuan **Settings → Secrets and Variables**, then list only its environment variable name under **Translation secret names** (for example, `OPENAI_API_KEY`; separate names with commas). Only names are persisted in plugin settings. Values are read at runtime with `getSecret` and are never written to settings, logs, or eventBus payloads. Unlisted key/token/secret-like environment variables are not forwarded to the process.
+
+**Cancel this translation** affects only the selected item; unloading the plugin stops scheduling and terminates every active process. Processes time out after 30 minutes, and Agent queue waits time out after 31 minutes. A failed upload deletes the newly created empty attachment with a version precondition; completed outputs are not deleted when another task fails. Automated tests use a stub CLI to verify real process creation, mono/dual outputs, nonzero exits, cancellation, and recovery. They do not establish that a particular pdf2zh release or translation model has passed real-engine validation.
+
+The top-bar **Connected citations** action uses the active top-level document as its root, orders documents by path, renumbers their citations, and rebuilds a managed `Reference` child document. Do not write manual content in that document or its bibliography. The action then synchronizes `【【Connected Documents】】→ rootDocumentID`, adding only missing memberships and preserving all other collections. Missing Zotero keys are reported explicitly, and a database-version change triggers one refresh and retry.
+
+Agent Actions are `ensure_papers`, `write_documents`, `refresh_library`, and `translate_paper`. Document conflict policies are `report` and `overwrite`; translation failures return the job error. The eventBus `GetFromPool` event returns at most 200 compact items and reports the full count separately as `total`; `Refresh` triggers a library refresh. Translation tasks and event listeners are cleaned up on unload.
 
 ## Templates, database, and import enhancements (0.4.0)
 
