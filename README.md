@@ -30,6 +30,10 @@ A SiYuan desktop plugin for browsing a Zotero 10+ library, creating paper notes 
 - Inserts numeric, author-date, or narrative citations from a multi-item selector and maintains a refreshable bibliography.
 - Imports PDF highlights, comments, page numbers, and Zotero deep links into a managed Note annotation section without changing other content.
 - Exports GB/T 7714, APA, IEEE, BibTeX/BibLaTeX, Typst, and LaTeX citations, plus Markdown, Word, and LaTeX documents.
+- Provides safe initial Note templates with whitelisted metadata and if/range controls, never arbitrary JavaScript evaluation.
+- Maps papers to native SiYuan database rows bound by paper document ID without duplicate rows on repeat sync.
+- Imports CSL-JSON and BibTeX files, and retrieves metadata from DOI, arXiv, ISBN, PMID/PMCID, and URLs.
+- Extracts XMP and limited text streams from local PDFs, showing metadata source and confidence; filenames are only low-confidence fallbacks.
 
 ## Requirements
 
@@ -82,6 +86,16 @@ Write personal content in `Note`; the paper document is maintained by the plugin
 Zotero traffic stays on `127.0.0.1:23119`. Settings, the library cache, document bindings, and remembered local write keys use SiYuan's private plugin storage. They are excluded from the release package and are not logged. Uninstalling the plugin does not delete paper documents or Zotero items.
 
 Even with these safeguards, maintain independent backups while the plugin is in internal testing.
+
+## Templates, database, and import enhancements (0.4.0)
+
+The **initial Note template** setting applies only to newly created Notes. Supported fields are `title`, `authors`, `year`, `journal`, `DOI`, `abstract`, `tags`, `noteLink`, and `itemKey`, plus `if`/`range` controls. Property chains and JavaScript evaluation are not supported. Existing Notes are never overwritten by template or metadata refreshes.
+
+The top-bar **Paper database** action creates or opens a native database and synchronizes existing paper documents. Rows bind title, authors, year, journal, DOI, tags, and URL by paper document ID; repeat sync updates rather than duplicates or deletes rows.
+
+**Import papers** accepts CSL-JSON and BibTeX files. **Retrieve / PDF import** accepts DOI, arXiv, ISBN, PMID/PMCID, URLs, and local PDFs. Results are previewed and editable before creation. Duplicates are skipped by default; selecting **Create duplicate** creates a real new item. Per-entry failures are reported without blocking valid imports.
+
+PDF recognition uses XMP first, limited text streams second, and filenames only as low-confidence fallbacks. Review low-confidence results manually. Image-only PDFs do not receive OCR. arXiv DOIs missing from Crossref fall back to the arXiv Atom API. External metadata requests time out after 15 seconds.
 
 ## Kimi research workflow import (0.2.0)
 

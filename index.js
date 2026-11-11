@@ -14,6 +14,7 @@ const ATTR_CITES = "custom-zotero-cites";
 const ATTR_STYLE = "custom-zotero-style";
 const ATTR_BIB = "custom-zotero-bib";
 const ATTR_ANNOTATIONS = "custom-zotero-annotations";
+const ATTR_LIBRARY_DATA = "custom-zotero-library-data";
 const DEFAULT_SETTINGS = {
     notebook: "",
     rootName: "Zotero",
@@ -23,6 +24,7 @@ const DEFAULT_SETTINGS = {
     noteSyncInterval: 0,
     syncMode: "incremental",
     workflowQueueEnabled: true,
+    noteTemplate: "# {{title}}\n\n{{if authors}}**作者：** {{authors}}\n\n{{end}}{{if year}}**年份：** {{year}}\n\n{{end}}{{if DOI}}**DOI：** {{DOI}}\n\n{{end}}{{if abstract}}## 摘要\n\n{{abstract}}\n\n{{end}}{{range tags}}- {{.}}\n{{end}}",
     citationStyle: "ieee",
     citationForm: "numeric"
 };
@@ -367,6 +369,9 @@ class ZoteroNotesPlugin extends Plugin {
                 menu.addItem({ icon: "iconRefresh", label: this.t("refresh"), click: () => this.refreshLibrary(true) });
                 menu.addItem({ icon: "iconLink", label: this.t("insertCitation"), click: () => this.openCitationSelector() });
                 menu.addItem({ icon: "iconDownload", label: this.t("exportContent"), click: () => this.openExportDialog() });
+                menu.addItem({ icon: "iconDatabase", label: "文献数据库 / Paper database", click: () => this.enqueue(() => this.openPaperDatabase()) });
+                menu.addItem({ icon: "iconUpload", label: "导入文献 / Import papers", click: () => this.openImportDialog() });
+                menu.addItem({ icon: "iconSearch", label: "检索 / PDF 导入", click: () => this.openAdvancedImportDialog() });
                 menu.addItem({ icon: "iconSettings", label: this.t("settings"), click: () => this.openSetting() });
             },
             callback: () => this.openSetting()
@@ -419,6 +424,7 @@ class ZoteroNotesPlugin extends Plugin {
             this.settingControls.workflowQueueEnabled.checked = this.settings.workflowQueueEnabled;
             this.settingControls.citationStyleSelect.value = this.settings.citationStyle;
             this.settingControls.citationFormSelect.value = this.settings.citationForm;
+            this.settingControls.noteTemplateInput.value = this.settings.noteTemplate;
         }
         this.startAutoSync();
         this.stopWorkflowQueue();
@@ -829,7 +835,11 @@ class ZoteroNotesPlugin extends Plugin {
             citationFormSelect.append(new Option(label, value));
         });
         citationFormSelect.value = this.settings.citationForm;
-        this.settingControls = { notebookSelect, rootInput, autoImport, authorLimitInput, librarySyncInput, noteSyncInput, syncModeSelect, workflowQueueEnabled, citationStyleSelect, citationFormSelect };
+        const noteTemplateInput = document.createElement("textarea");
+        noteTemplateInput.className = "b3-text-field fn__block";
+        noteTemplateInput.rows = 6;
+        noteTemplateInput.value = this.settings.noteTemplate;
+        this.settingControls = { notebookSelect, rootInput, autoImport, authorLimitInput, librarySyncInput, noteSyncInput, syncModeSelect, workflowQueueEnabled, citationStyleSelect, citationFormSelect, noteTemplateInput };
         const save = async () => {
             const previous = { notebook: this.settings.notebook, rootName: this.settings.rootName };
             this.settings = this.normalizeSettings({
@@ -843,7 +853,8 @@ class ZoteroNotesPlugin extends Plugin {
                 syncMode: syncModeSelect.value,
                 workflowQueueEnabled: workflowQueueEnabled.checked,
                 citationStyle: citationStyleSelect.value,
-                citationForm: citationFormSelect.value
+                citationForm: citationFormSelect.value,
+                noteTemplate: noteTemplateInput.value
             });
             authorLimitInput.value = this.settings.authorLimit;
             librarySyncInput.value = this.settings.librarySyncInterval;
@@ -905,6 +916,11 @@ class ZoteroNotesPlugin extends Plugin {
             description: this.t("workflowQueueEnabledTip"),
             actionElement: workflowQueueEnabled
         });
+        this.setting.addItem({
+            title: "Note 初始模板",
+            description: "仅支持 {{title}}、{{authors}}、{{year}}、{{journal}}、{{DOI}}、{{abstract}}、{{tags}}、{{noteLink}}、{{itemKey}} 及 if/range 控制结构；只用于新建 Note。",
+            actionElement: noteTemplateInput
+        });
         const testButton = element("button", "b3-button b3-button--outline", this.t("testConnection"));
         testButton.addEventListener("click", async () => {
             testButton.disabled = true;
@@ -931,6 +947,7 @@ class ZoteroNotesPlugin extends Plugin {
         workflowQueueEnabled.addEventListener("change", save);
         citationStyleSelect.addEventListener("change", save);
         citationFormSelect.addEventListener("change", save);
+        noteTemplateInput.addEventListener("change", save);
     }
 
     async loadNotebooks(select) {
@@ -1230,11 +1247,19 @@ class ZoteroNotesPlugin extends Plugin {
                 notebook: this.settings.notebook,
                 path: notePath
             });
+            const isNewNote = !noteIDs?.length;
             binding.noteDocId = noteIDs?.length ? noteIDs[0] : await this.request("/api/filetree/createDocWithMd", {
                 notebook: this.settings.notebook,
                 path: notePath,
                 markdown: ""
             });
+            if (isNewNote) {
+                await this.request("/api/block/updateBlock", {
+                    dataType: "markdown",
+                    data: this.initialNoteMarkdown(item, binding.noteDocId),
+                    id: binding.noteDocId
+                });
+            }
         }
         await this.request("/api/block/updateBlock", {
             dataType: "markdown",
@@ -1267,6 +1292,273 @@ class ZoteroNotesPlugin extends Plugin {
             await this.saveData("bindings.json", this.bindings);
             this.render();
         });
+    }
+
+    templateItemContext(item, noteDocId) {
+        const data = item?.data || {};
+        return {
+            title: itemTitle(item),
+            authors: itemAuthors(item),
+            year: itemYear(item),
+            journal: data.publicationTitle || data.journalAbbreviation || data.conferenceName || data.bookTitle || "",
+            DOI: data.DOI || data.doi || "",
+            abstract: data.abstractNote || "",
+            tags: (data.tags || []).map((tag) => tag.tag).filter(Boolean),
+            noteLink: `[Note](siyuan://blocks/${noteDocId})`,
+            itemKey: item?.key || ""
+        };
+    }
+
+    templateFieldValue(context, path) {
+        if (path === ".") return context.current;
+        if (!Object.hasOwn(context.root, path)) return undefined;
+        return context.root[path];
+    }
+
+    templateEscape(value) {
+        if (value === undefined || value === null) return "";
+        return markdownText(value);
+    }
+
+    renderSafeTemplate(template, item, noteDocId) {
+        const root = this.templateItemContext(item, noteDocId);
+        const renderNodes = (source, context) => {
+            let output = "";
+            let position = 0;
+            while (position < source.length) {
+                const start = source.indexOf("{{", position);
+                if (start < 0) {
+                    output += source.slice(position);
+                    break;
+                }
+                output += source.slice(position, start);
+                const finish = source.indexOf("}}", start + 2);
+                if (finish < 0) {
+                    output += source.slice(start);
+                    break;
+                }
+                const expression = source.slice(start + 2, finish).trim();
+                position = finish + 2;
+                if (expression.startsWith("if ") || expression.startsWith("range ")) {
+                    const kind = expression.startsWith("if ") ? "if" : "range";
+                    const path = expression.slice(kind.length).trim();
+                    const block = this.templateBlock(source, position, kind);
+                    const value = this.templateFieldValue(context, path);
+                    if (kind === "if") {
+                        const truthy = Array.isArray(value) ? value.length > 0 : Boolean(value);
+                        output += truthy ? renderNodes(block.truthy, context) : renderNodes(block.falsy, context);
+                    } else {
+                        const values = Array.isArray(value) ? value : [];
+                        for (const current of values) {
+                            output += renderNodes(block.truthy, { root: context.root, current });
+                        }
+                    }
+                    position = block.next;
+                } else {
+                    const value = this.templateFieldValue(context, expression);
+                    output += expression === "noteLink" ? (value || "") : this.templateEscape(value);
+                }
+            }
+            return output;
+        };
+        return renderNodes(String(template || ""), { root });
+    }
+
+    templateBlock(source, start, kind) {
+        let depth = 1;
+        let elseIndex = -1;
+        let elseEnd = -1;
+        let position = start;
+        while (position < source.length) {
+            const startTag = source.indexOf("{{", position);
+            if (startTag < 0) throw new Error(`模板缺少 {{end}}`);
+            const finish = source.indexOf("}}", startTag + 2);
+            if (finish < 0) throw new Error("模板表达式未闭合");
+            const expression = source.slice(startTag + 2, finish).trim();
+            if (/^(?:if|range)\s/.test(expression)) depth++;
+            if (expression === "else" && depth === 1 && elseIndex < 0) {
+                elseIndex = startTag;
+                elseEnd = finish + 2;
+            }
+            if (expression === "end") {
+                depth--;
+                if (depth === 0) {
+                    return {
+                        truthy: source.slice(start, elseIndex >= 0 ? elseIndex : startTag),
+                        falsy: elseIndex >= 0 ? source.slice(elseEnd, startTag) : "",
+                        next: finish + 2
+                    };
+                }
+            }
+            position = finish + 2;
+        }
+        throw new Error(`模板缺少 {{end}}`);
+    }
+
+    initialNoteMarkdown(item, noteDocId) {
+        return this.renderSafeTemplate(this.settings.noteTemplate, item, noteDocId);
+    }
+
+    newBlockId() {
+        const now = new Date();
+        const timestamp = [now.getFullYear(), now.getMonth() + 1, now.getDate(), now.getHours(), now.getMinutes(), now.getSeconds()]
+            .map((value, index) => String(value).padStart(index === 0 ? 4 : 2, "0")).join("");
+        const random = new Uint32Array(1);
+        crypto.getRandomValues(random);
+        return `${timestamp}-${random[0].toString(36).padStart(7, "0").slice(-7)}`;
+    }
+
+    databaseSchema() {
+        return [
+            ["title", "标题"],
+            ["authors", "作者"],
+            ["year", "年份"],
+            ["journal", "期刊"],
+            ["doi", "DOI"],
+            ["tags", "标签"],
+            ["url", "链接"]
+        ];
+    }
+
+    databaseCellValue(field, item) {
+        if (field === "tags") {
+            return { type: "mSelect", mSelect: (item.data?.tags || []).map((tag, index) => ({ content: tag.tag, color: String(index % 14 + 1) })).filter((value) => value.content) };
+        }
+        if (field === "url") return { type: "url", url: { content: cleanText(item.data?.url) } };
+        const values = {
+            title: itemTitle(item),
+            authors: itemAuthors(item),
+            year: itemYear(item),
+            journal: item.data?.publicationTitle || item.data?.journalAbbreviation || item.data?.conferenceName || item.data?.bookTitle || "",
+            doi: item.data?.DOI || item.data?.doi || ""
+        };
+        return { type: "text", text: { content: cleanText(values[field]) } };
+    }
+
+    databaseLibraryData(docId) {
+        return this.request("/api/attr/getBlockAttrs", { id: docId }).then((attrs) => {
+            const raw = attrs?.[ATTR_LIBRARY_DATA];
+            if (!raw) return null;
+            try {
+                const data = JSON.parse(raw);
+                if (!data.avID || !data.avBlockId) return null;
+                return data;
+            } catch {
+                return null;
+            }
+        });
+    }
+
+    async ensurePaperDatabase() {
+        const root = await this.ensureRoot();
+        const path = `${root.path}/文献数据库`;
+        const ids = await this.request("/api/filetree/getIDsByHPath", { notebook: this.settings.notebook, path });
+        const docId = ids?.[0] || await this.request("/api/filetree/createDocWithMd", {
+            notebook: this.settings.notebook,
+            path,
+            markdown: ""
+        });
+        const existing = await this.databaseLibraryData(docId);
+        if (existing) return { docId, ...existing };
+        const avID = this.newBlockId();
+        const avBlockId = this.newBlockId();
+        await this.request("/api/block/appendBlock", {
+            dataType: "dom",
+            data: `<div class="av" data-node-id="${avBlockId}" data-av-id="${avID}" data-type="NodeAttributeView" data-av-type="table"></div>`,
+            parentID: docId
+        });
+        await this.request("/api/av/renderAttributeView", { id: avID, blockID: avBlockId, page: 1, pageSize: 100, query: "", groupPaging: {}, createIfNotExist: true });
+        const fieldKeyIds = {};
+        let previousKeyID = "";
+        for (const [field, label] of this.databaseSchema()) {
+            const keyID = this.newBlockId();
+            const keyType = field === "tags" ? "mSelect" : field === "url" ? "url" : "text";
+            await this.request("/api/av/addAttributeViewKey", { avID, keyID, keyName: label, keyType, keyIcon: "", previousKeyID });
+            fieldKeyIds[field] = keyID;
+            previousKeyID = keyID;
+        }
+        await this.request("/api/attr/setBlockAttrs", {
+            id: docId,
+            attrs: { [ATTR_LIBRARY_DATA]: JSON.stringify({ avID, avBlockId, fieldKeyIds }) }
+        });
+        return { docId, avID, avBlockId, fieldKeyIds };
+    }
+
+    async syncPaperDatabase(item) {
+        return this.withExclusiveLock(`${PLUGIN_NAME}:database`, async () => {
+            const database = await this.ensurePaperDatabase();
+            let keyChanged = false;
+            let previousKeyID = "";
+            for (const [field, label] of this.databaseSchema()) {
+                if (!database.fieldKeyIds[field]) {
+                    const keyID = this.newBlockId();
+                    await this.request("/api/av/addAttributeViewKey", {
+                        avID: database.avID,
+                        keyID,
+                        keyName: label,
+                        keyType: field === "tags" ? "mSelect" : field === "url" ? "url" : "text",
+                        keyIcon: "",
+                        previousKeyID
+                    });
+                    database.fieldKeyIds[field] = keyID;
+                    keyChanged = true;
+                }
+                previousKeyID = database.fieldKeyIds[field];
+            }
+            if (keyChanged) {
+                await this.request("/api/attr/setBlockAttrs", {
+                    id: database.docId,
+                    attrs: { [ATTR_LIBRARY_DATA]: JSON.stringify({ avID: database.avID, avBlockId: database.avBlockId, fieldKeyIds: database.fieldKeyIds }) }
+                });
+            }
+            const paperDocId = this.bindings[this.bindingKey(item.key)]?.parentDocId || item.key;
+            const binding = { avID: database.avID, blockIDs: [paperDocId] };
+            let ids = await this.request("/api/av/getAttributeViewItemIDsByBoundIDs", binding);
+            let itemID = ids?.[paperDocId];
+            if (!itemID) {
+                await this.request("/api/av/addAttributeViewBlocks", {
+                    avID: database.avID,
+                    blockID: database.avBlockId,
+                    viewID: "",
+                    groupID: "",
+                    previousID: "",
+                    srcs: [{ id: paperDocId, content: itemTitle(item), isDetached: false }],
+                    ignoreDefaultFill: true
+                });
+                ids = await this.request("/api/av/getAttributeViewItemIDsByBoundIDs", binding);
+                itemID = ids?.[paperDocId];
+            }
+            if (!itemID) throw new Error("Unable to bind the Zotero database row");
+            for (const [field] of this.databaseSchema()) {
+                await this.request("/api/av/setAttributeViewBlockAttr", {
+                    avID: database.avID,
+                    keyID: database.fieldKeyIds[field],
+                    itemID,
+                    value: this.databaseCellValue(field, item)
+                });
+            }
+            return itemID;
+        });
+    }
+
+    async syncAllPaperDatabases() {
+        const errors = [];
+        for (const item of this.library.items) {
+            const binding = this.bindings[this.bindingKey(item.key)];
+            if (!binding?.parentDocId) continue;
+            try {
+                await this.syncPaperDatabase(item);
+            } catch (error) {
+                errors.push(`${itemTitle(item)}：${errorMessage(error)}`);
+            }
+        }
+        if (errors.length) showMessage(`部分数据库同步失败：${errors.slice(0, 3).join("；")}`, 8000);
+    }
+
+    async openPaperDatabase() {
+        const database = await this.withExclusiveLock(`${PLUGIN_NAME}:database`, () => this.ensurePaperDatabase());
+        await this.syncAllPaperDatabases();
+        await openTab({ app: this.app, doc: { id: database.docId } });
     }
 
     async metadataMarkdown(item, noteDocId) {
@@ -1803,6 +2095,443 @@ class ZoteroNotesPlugin extends Plugin {
         });
     }
 
+    normalizeCSLItem(entry) {
+        const typeMap = {
+            "article-journal": "journalArticle",
+            "paper-conference": "conferencePaper",
+            "book-chapter": "bookSection",
+            chapter: "bookSection",
+            article: "journalArticle",
+            "posted-content": "preprint",
+            book: "book",
+            thesis: "thesis",
+            webpage: "webpage",
+            preprint: "preprint"
+        };
+        const issued = entry.issued?.["date-parts"]?.[0] || [];
+        const url = cleanText(entry.URL || entry.url);
+        const arxiv = url.match(/arxiv\.org\/(?:abs|pdf)\/([^\s/?#]+)/i)?.[1] || cleanText(entry.arxivId || entry.arxiv_id);
+        return {
+            itemType: typeMap[entry.type] || "journalArticle",
+            title: cleanText(Array.isArray(entry.title) ? entry.title.filter(Boolean).join(" ") : entry.title),
+            creators: (entry.author || entry.creators || []).map((creator) => ({
+                creatorType: "author",
+                family: cleanText(creator.family || creator.lastName),
+                given: cleanText(creator.given || creator.firstName)
+            })),
+            date: issued.filter(Boolean).join("-"),
+            abstract: cleanText(entry.abstract || entry.abstractNote),
+            doi: cleanText(entry.DOI || entry.doi),
+            isbn: cleanText(entry.ISBN || entry.isbn),
+            issn: cleanText(entry.ISSN || entry.issn),
+            url,
+            publicationTitle: cleanText(Array.isArray(entry["container-title"]) ? entry["container-title"].filter(Boolean).join(" ") : entry["container-title"] || entry.journal || entry.publicationTitle),
+            publisher: cleanText(entry.publisher),
+            arxiv_id: arxiv,
+            tags: cleanText(entry.keyword).split(/[,;]/).map((tag) => tag.trim()).filter(Boolean),
+            key: cleanText(entry.id || entry["citation-key"])
+        };
+    }
+
+    bibUnescape(value) {
+        return value.replace(/\\([&{}])/g, "$1").replace(/\\textbackslash\s*/g, "\\");
+    }
+
+    bibFields(body) {
+        const fields = {};
+        let position = 0;
+        while (position < body.length) {
+            const match = body.slice(position).match(/^\s*([A-Za-z][\w-]*)\s*=\s*/);
+            if (!match) break;
+            const name = match[1].toLowerCase();
+            position += match[0].length;
+            let value = "";
+            let depth = 0;
+            let quoted = false;
+            let started = false;
+            while (position < body.length) {
+                const char = body[position];
+                if (char === "\\") {
+                    value += char + (body[position + 1] || "");
+                    position += 2;
+                    continue;
+                }
+                if (char === '"') quoted = !quoted;
+                if (!quoted) {
+                    if (char === "{") {
+                        depth++;
+                        started = true;
+                    } else if (char === "}") {
+                        depth--;
+                    } else if (char === "," && depth <= 0) {
+                        position++;
+                        break;
+                    }
+                }
+                value += char;
+                position++;
+                started = true;
+            }
+            fields[name] = this.bibUnescape(value.trim().replace(/^\{(.*)\}$/s, "$1").trim());
+            if (!started) break;
+        }
+        return fields;
+    }
+
+    parseBibTeX(source) {
+        const entries = [];
+        let position = 0;
+        const text = String(source || "");
+        while (position < text.length) {
+            const at = text.indexOf("@", position);
+            if (at < 0) break;
+            const header = text.slice(at).match(/^@(\w+)\s*\{\s*([^,\s]+)\s*,/);
+            if (!header) break;
+            const type = header[1].toLowerCase();
+            const key = header[2];
+            const bodyStart = at + header[0].length;
+            let depth = 1;
+            let quoted = false;
+            let end = bodyStart;
+            for (; end < text.length && depth > 0; end++) {
+                const char = text[end];
+                if (char === "\\") {
+                    end++;
+                    continue;
+                }
+                if (char === '"') quoted = !quoted;
+                if (!quoted) {
+                    if (char === "{") depth++;
+                    else if (char === "}") depth--;
+                }
+            }
+            const body = text.slice(bodyStart, end - 1);
+            const fields = this.bibFields(body);
+            const creators = (fields.author || "").split(/\s+and\s+/i).filter(Boolean).map((name) => {
+                const parts = name.includes(",") ? name.split(",", 2) : [name.split(/\s+/).at(-1), name.split(/\s+/).slice(0, -1).join(" ")];
+                return { creatorType: "author", family: cleanText(parts[0]), given: cleanText(parts[1]) };
+            });
+            const data = {
+                key,
+                itemType: type === "book" ? "book" : type === "inproceedings" || type === "conference" ? "conferencePaper" : type === "thesis" || type === "phdthesis" || type === "mastersthesis" ? "thesis" : "journalArticle",
+                title: cleanText(fields.title),
+                creators,
+                date: cleanText(fields.year || fields.date),
+                abstractNote: cleanText(fields.abstract),
+                DOI: cleanText(fields.doi),
+                ISBN: cleanText(fields.isbn),
+                ISSN: cleanText(fields.issn),
+                url: cleanText(fields.url),
+                publicationTitle: cleanText(fields.journal || fields.booktitle),
+                publisher: cleanText(fields.publisher),
+                citationKey: key,
+                tags: cleanText(fields.keywords).split(/[,;]/).map((tag) => tag.trim()).filter(Boolean)
+            };
+            data.archiveID = data.url.match(/arxiv\.org\/(?:abs|pdf)\/([^\s/?#]+)/i)?.[1] || "";
+            entries.push({ key, data });
+            position = end;
+        }
+        if (!entries.length) throw new Error("无法识别 BibTeX 内容");
+        return entries;
+    }
+
+    parseImportData(source) {
+        const text = String(source || "").trim();
+        if (text.startsWith("[") || text.startsWith("{")) {
+            const parsed = JSON.parse(text);
+            const entries = Array.isArray(parsed) ? parsed : parsed.items;
+            if (!Array.isArray(entries)) throw new Error("CSL-JSON 必须是条目数组");
+            return { papers: entries.map((entry) => this.normalizeCSLItem(entry)), errors: [] };
+        }
+        const entries = this.parseBibTeX(text);
+        return {
+            papers: entries.map((item) => this.normalizeCSLItem({
+                id: item.key,
+                type: item.data.itemType,
+                title: item.data.title,
+                author: item.data.creators.map((creator) => ({ family: creator.family, given: creator.given })),
+                issued: { "date-parts": [[item.data.date]] },
+                abstract: item.data.abstractNote,
+                DOI: item.data.DOI,
+                ISBN: item.data.ISBN,
+                ISSN: item.data.ISSN,
+                URL: item.data.url,
+                "container-title": item.data.publicationTitle,
+                publisher: item.data.publisher,
+                keyword: item.data.tags.join(",")
+            })),
+            errors: []
+        };
+    }
+
+    async importPapers(papers, options = {}) {
+        const action = options.duplicateAction || "skip";
+        const candidates = [];
+        let skipped = 0;
+        for (const paper of papers) {
+            const duplicate = this.library.items.some((item) => this.researchItemMatches(item, paper));
+            if (duplicate && action === "skip") {
+                skipped++;
+                continue;
+            }
+            candidates.push(paper);
+        }
+        const created = candidates.length ? await this.ensurePapers(candidates, { forceCreate: action === "create" }) : [];
+        const errors = created.filter((result) => result.itemStatus === "error");
+        return { imported: created.length - errors.length, skipped, errors };
+    }
+
+    async importFile(file, duplicateAction = "skip") {
+        const result = this.parseImportData(await file.text());
+        const imported = await this.importPapers(result.papers, { duplicateAction });
+        return { ...imported, errors: result.errors };
+    }
+
+    openImportDialog() {
+        const dialog = new Dialog({
+            title: "导入文献 / Import papers",
+            content: `<div class="b3-dialog__content"><input type="file" class="b3-text-field fn__block" data-import-file accept=".json,.bib,.bibtex"><select class="b3-select fn__block" data-import-duplicate><option value="skip">重复条目：跳过</option><option value="create">重复条目：仍创建副本</option></select><div data-import-result></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-import-confirm>导入</button></div>`,
+            width: "520px"
+        });
+        const fileInput = dialog.element.querySelector("[data-import-file]");
+        const action = dialog.element.querySelector("[data-import-duplicate]");
+        const result = dialog.element.querySelector("[data-import-result]");
+        dialog.element.querySelector("[data-import-confirm]").addEventListener("click", () => {
+            const file = fileInput.files?.[0];
+            if (!file) {
+                result.textContent = "请选择 CSL-JSON 或 BibTeX 文件";
+                return;
+            }
+            this.enqueue(async () => {
+                const outcome = await this.importFile(file, action.value);
+                result.textContent = `已导入 ${outcome.imported} 篇，跳过重复 ${outcome.skipped} 篇${outcome.errors.length ? `，失败 ${outcome.errors.length} 条` : ""}`;
+            });
+        });
+    }
+
+    normalizeIdentifier(input) {
+        const value = cleanText(input);
+        if (/^arxiv:/i.test(value)) return { kind: "arxiv", value: value.replace(/^arxiv:\s*/i, "").replace(/v\d+$/i, "") };
+        if (/^10\.\d{4,9}\//i.test(value)) return { kind: "doi", value: value.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "") };
+        if (/^pmid:/i.test(value)) return { kind: "pmid", value: value.replace(/^pmid:/i, "") };
+        if (/^pmc/i.test(value)) return { kind: "pmcid", value: value.toUpperCase() };
+        if (/^\d{10}(?:\d{3})?$/.test(value.replace(/[- ]/g, ""))) return { kind: "isbn", value: value.replace(/[- ]/g, "") };
+        if (/^\d+$/.test(value)) return { kind: "pmid", value };
+        if (/^https?:\/\//i.test(value)) return { kind: "url", value };
+        throw new Error("无法识别该 DOI、arXiv、ISBN、PMID/PMCID 或 URL");
+    }
+
+    async externalJSON(url, options = {}) {
+        const response = await fetch(url, { ...options, signal: AbortSignal.any([this.abortController.signal, AbortSignal.timeout(15000)]) });
+        if (!response.ok) throw new Error(`元数据接口失败：${response.status}`);
+        return response.json();
+    }
+
+    async externalText(url, options = {}) {
+        const response = await fetch(url, { ...options, signal: AbortSignal.any([this.abortController.signal, AbortSignal.timeout(15000)]) });
+        if (!response.ok) throw new Error(`元数据接口失败：${response.status}`);
+        return response.text();
+    }
+
+    xmlTag(source, tag) {
+        return cleanText(source.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, "i"))?.[1]);
+    }
+
+    async lookupIdentifier(input) {
+        const identifier = this.normalizeIdentifier(input);
+        if (identifier.kind === "doi") {
+            try {
+                const result = await this.externalJSON(`https://api.crossref.org/works/${encodeURIComponent(identifier.value)}`);
+                return this.normalizeCSLItem(result.message);
+            } catch (error) {
+                const arxiv = identifier.value.match(/arxiv\.([^/]+)/i)?.[1];
+                if (!arxiv) throw error;
+                const result = await this.lookupIdentifier(`arXiv:${arxiv}`);
+                return { ...result, doi: identifier.value };
+            }
+        }
+        if (identifier.kind === "arxiv") {
+            const xml = await this.externalText(`https://export.arxiv.org/api/query?id_list=${encodeURIComponent(identifier.value)}`);
+            const entry = xml.match(/<entry>([\s\S]*?)<\/entry>/i)?.[1] || xml;
+            return this.normalizeCSLItem({
+                type: "preprint",
+                title: this.xmlTag(entry, "title"),
+                author: Array.from(entry.matchAll(/<author>\s*<name>([^<]+)<\/name>/g)).map((match) => {
+                    const parts = match[1].trim().split(/\s+/);
+                    return { family: parts.at(-1), given: parts.slice(0, -1).join(" ") };
+                }),
+                issued: { "date-parts": [[this.xmlTag(entry, "published").slice(0, 4)]] },
+                abstract: this.xmlTag(entry, "summary"),
+                URL: this.xmlTag(entry, "id"),
+                keyword: Array.from(entry.matchAll(/<category[^>]*term="([^"]+)"/g)).map((match) => match[1]).join(",")
+            });
+        }
+        if (identifier.kind === "isbn") {
+            const result = await this.externalJSON(`https://openlibrary.org/search.json?isbn=${encodeURIComponent(identifier.value)}`);
+            const book = result.docs?.[0];
+            if (!book) throw new Error("未找到 ISBN 元数据");
+            return this.normalizeCSLItem({
+                type: "book",
+                title: book.title,
+                author: (book.author_name || []).map((name) => ({ family: name.split(/\s+/).at(-1), given: name.split(/\s+/).slice(0, -1).join(" ") })),
+                issued: { "date-parts": [[book.first_publish_year]] },
+                publisher: book.publisher?.[0],
+                ISBN: identifier.value
+            });
+        }
+        if (identifier.kind === "pmid") {
+            const result = await this.externalJSON(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${encodeURIComponent(identifier.value)}&retmode=json`);
+            const paper = result.result?.[identifier.value];
+            if (!paper) throw new Error("未找到 PubMed 元数据");
+            return this.normalizeCSLItem({
+                type: "article-journal",
+                title: paper.title,
+                author: (paper.authors || []).map((author) => ({ family: author.name.split(/\s+/)[0], given: author.name.split(/\s+/).slice(1).join(" ") })),
+                issued: { "date-parts": [[paper.pubdate]] },
+                "container-title": paper.fulljournalname,
+                DOI: paper.elocationid?.replace(/^doi:\s*/i, ""),
+                URL: `https://pubmed.ncbi.nlm.nih.gov/${identifier.value}/`
+            });
+        }
+        if (identifier.kind === "pmcid") {
+            const converted = await this.externalJSON(`https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids=${encodeURIComponent(identifier.value)}&format=json`);
+            const pmid = converted.records?.[0]?.pmid;
+            if (pmid) return this.lookupIdentifier(pmid);
+            return this.lookupIdentifier(`https://pmc.ncbi.nlm.nih.gov/articles/${identifier.value}/`);
+        }
+        const result = await this.externalJSON(`https://www.mediawiki.org/api/rest_v1/data/citation/zotero/${encodeURIComponent(identifier.value)}`);
+        const item = Array.isArray(result) ? result[0] : result;
+        if (!item) throw new Error("未找到网页元数据");
+        const data = item.data || item;
+        return this.normalizeCSLItem({
+            type: data.itemType,
+            title: data.title,
+            author: (data.creators || []).map((creator) => ({ family: creator.lastName || creator.name, given: creator.firstName })),
+            issued: { "date-parts": [[data.date]] },
+            abstract: data.abstractNote,
+            DOI: data.DOI || data.doi,
+            ISBN: data.ISBN,
+            ISSN: data.ISSN,
+            URL: data.url,
+            "container-title": data.publicationTitle,
+            publisher: data.publisher,
+            keyword: (data.tags || []).map((tag) => tag.tag).join(",")
+        });
+    }
+
+    pdfTextFromStream(bytes) {
+        const source = new TextDecoder("latin1").decode(bytes);
+        const strings = [];
+        for (const match of source.matchAll(/\(([^()]*(?:\\.[^()]*)*)\)\s*Tj/g)) {
+            const text = match[1].replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "\t").replace(/\\([()\\])/g, "$1").replace(/\\([0-7]{1,3})/g, (_, code) => String.fromCharCode(Number.parseInt(code, 8))).trim();
+            if (text.length >= 8) strings.push(text);
+        }
+        return strings.sort((a, b) => b.length - a.length)[0] || "";
+    }
+
+    async extractPDFMetadata(bytes, filename = "paper.pdf") {
+        if (bytes.byteLength > 64 * 1024 * 1024) throw new Error("PDF 超过 64 MiB 限制");
+        const source = new TextDecoder("utf-8").decode(bytes);
+        const latin1Source = new TextDecoder("latin1").decode(bytes);
+        const warnings = [];
+        const fallback = filename.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim() || "Untitled PDF";
+        const xmpTitle = source.match(/<dc:title[^>]*>[\s\S]*?<rdf:li[^>]*>([^<]+)<\/rdf:li>/i)?.[1];
+        const creatorBlock = source.match(/<dc:creator[^>]*>([\s\S]*?)<\/dc:creator>/i)?.[1] || "";
+        const creators = Array.from(creatorBlock.matchAll(/<rdf:li[^>]*>([^<]+)<\/rdf:li>/g)).map((match) => {
+            const parts = match[1].trim().split(/\s+/);
+            return { creatorType: "author", family: parts.at(-1), given: parts.slice(0, -1).join(" ") };
+        });
+        const abstract = this.plainTextFromHTML(source.match(/<dc:description[^>]*>([\s\S]*?)<\/dc:description>/i)?.[1] || "");
+        const date = source.match(/<xmp:CreateDate[^>]*>([^<]+)/i)?.[1] || "";
+        let title = cleanText(xmpTitle);
+        let confidence = 0;
+        let provider = "";
+        if (title) {
+            confidence = 0.85;
+            provider = "XMP";
+        } else {
+            let text = this.pdfTextFromStream(bytes);
+            if (!text && /FlateDecode/.test(source)) {
+                try {
+                    const streamMatch = latin1Source.match(/stream\r?\n([\s\S]*?)endstream/);
+                    if (streamMatch) {
+                        const start = streamMatch.index + streamMatch[0].indexOf("\n") + 1;
+                        let end = streamMatch.index + streamMatch[0].length - "endstream".length;
+                        while (end > start && (bytes[end - 1] === 10 || bytes[end - 1] === 13)) end--;
+                        const compressed = bytes.subarray(start, end);
+                        const inflated = await new Response(new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate"))).arrayBuffer();
+                        text = this.pdfTextFromStream(inflated);
+                    }
+                } catch {
+                    warnings.push("压缩文本流无法解析");
+                }
+            }
+            if (text) {
+                title = cleanText(text);
+                confidence = 0.55;
+                provider = "PDF text";
+            }
+        }
+        if (!title) {
+            title = fallback;
+            confidence = 0.25;
+            provider = "filename";
+            warnings.push("未识别可靠元数据，使用文件名兜底");
+        }
+        return {
+            itemType: "journalArticle",
+            title,
+            creators,
+            date,
+            abstract,
+            doi: "",
+            isbn: "",
+            issn: "",
+            url: "",
+            publicationTitle: "",
+            publisher: "",
+            arxiv_id: "",
+            tags: [],
+            confidence,
+            provider,
+            warnings
+        };
+    }
+
+    openAdvancedImportDialog() {
+        const dialog = new Dialog({
+            title: "检索 / PDF 导入",
+            content: `<div class="b3-dialog__content"><input class="b3-text-field fn__block" data-advanced-identifier placeholder="DOI、arXiv、ISBN、PMID/PMCID、URL"><input type="file" class="b3-text-field fn__block" data-advanced-pdf accept="application/pdf,.pdf"><select class="b3-select fn__block" data-advanced-duplicate><option value="skip">重复条目：跳过</option><option value="create">重复条目：仍创建副本</option></select><button class="b3-button b3-button--outline" data-advanced-fetch>检索 / 解析</button><input class="b3-text-field fn__block" data-advanced-title placeholder="识别标题（可编辑）"><div data-advanced-preview></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-advanced-import>确认导入</button></div>`,
+            width: "600px"
+        });
+        const identifier = dialog.element.querySelector("[data-advanced-identifier]");
+        const pdf = dialog.element.querySelector("[data-advanced-pdf]");
+        const duplicate = dialog.element.querySelector("[data-advanced-duplicate]");
+        const title = dialog.element.querySelector("[data-advanced-title]");
+        const preview = dialog.element.querySelector("[data-advanced-preview]");
+        let pending = null;
+        dialog.element.querySelector("[data-advanced-fetch]").addEventListener("click", () => {
+            this.enqueue(async () => {
+                if (pdf.files?.[0]) pending = await this.extractPDFMetadata(await pdf.files[0].arrayBuffer(), pdf.files[0].name);
+                else pending = await this.lookupIdentifier(identifier.value);
+                title.value = pending.title;
+                const source = pending.provider || pending.kind || "online";
+                preview.textContent = `来源：${source}；置信度：${pending.confidence ?? "在线接口"}${pending.warnings?.length ? `；${pending.warnings.join("；")}` : ""}`;
+            });
+        });
+        dialog.element.querySelector("[data-advanced-import]").addEventListener("click", () => {
+            this.enqueue(async () => {
+                if (!pending) {
+                    preview.textContent = "请先检索或解析";
+                    return;
+                }
+                pending.title = cleanText(title.value) || pending.title;
+                const result = await this.importPapers([pending], { duplicateAction: duplicate.value });
+                preview.textContent = `已导入 ${result.imported} 篇，跳过重复 ${result.skipped} 篇`;
+            });
+        });
+    }
+
     researchPaperIdentity(paper) {
         const arxiv = cleanText(paper?.arxiv_id || paper?.arxivId).replace(/^arxiv:\s*/i, "").replace(/v\d+$/i, "").toLowerCase();
         const doi = cleanText(paper?.doi || paper?.DOI).replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").toLowerCase();
@@ -1823,12 +2552,20 @@ class ZoteroNotesPlugin extends Plugin {
         return !!expected.title && expected.title === actual.title;
     }
 
-    researchItemData(paper, itemType = "preprint") {
+    researchItemData(paper, itemType = paper?.itemType || "preprint") {
         const identity = this.researchPaperIdentity(paper);
+        const creators = Array.isArray(paper.creators)
+            ? paper.creators.map((creator) => ({
+                creatorType: creator.creatorType || "author",
+                lastName: cleanText(creator.family || creator.lastName),
+                firstName: cleanText(creator.given || creator.firstName),
+                name: cleanText(creator.name)
+            }))
+            : (Array.isArray(paper.authors) ? paper.authors : []).filter(Boolean).map((name) => ({ creatorType: "author", name: cleanText(name) }));
         const data = {
             itemType,
             title: cleanText(paper.title),
-            creators: (Array.isArray(paper.authors) ? paper.authors : []).filter(Boolean).map((name) => ({ creatorType: "author", name: cleanText(name) })),
+            creators,
             abstractNote: cleanText(paper.abstract || paper.summary),
             date: cleanText(paper.published || paper.date),
             url: cleanText(paper.url) || (identity.arxiv ? `https://arxiv.org/abs/${identity.arxiv}` : ""),
@@ -1841,7 +2578,7 @@ class ZoteroNotesPlugin extends Plugin {
             data.repository = identity.arxiv ? "arXiv" : cleanText(paper.venue);
             data.archiveID = identity.arxiv;
         } else {
-            data.publicationTitle = cleanText(paper.venue);
+            data.publicationTitle = cleanText(paper.venue || paper.publicationTitle || paper.journal);
         }
         return data;
     }
@@ -1929,7 +2666,7 @@ class ZoteroNotesPlugin extends Plugin {
         }));
     }
 
-    async ensurePapers(papers) {
+    async ensurePapers(papers, options = {}) {
         if (!Array.isArray(papers) || papers.length > 50) throw new Error("papers must be an array of at most 50 items.");
         if (!papers.length) return [];
         if (!this.settings.notebook) throw new Error(this.t("selectNotebook"));
@@ -1942,7 +2679,7 @@ class ZoteroNotesPlugin extends Plugin {
                 if (!cleanText(paper?.title)) throw new Error("Paper title is required.");
                 let item = this.library.items.find((candidate) => this.researchItemMatches(candidate, paper));
                 let itemStatus = "existing";
-                if (!item) {
+                if (!item || options.forceCreate) {
                     item = await this.createResearchItem(paper, collectionKey);
                     itemStatus = "created";
                     changed = true;
