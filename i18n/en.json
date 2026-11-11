@@ -68,5 +68,8 @@
   "lossInlineStyle": "Inline styles such as text colors: styles are lost, text is kept",
   "lossImageStyle": "Image size and alignment attributes: only the image and its alt text are kept",
   "lossIndent": "Paragraph indentation: indent styling is lost, text is kept",
-  "lossBlockRef": "SiYuan block references and SiYuan links: cannot jump back to SiYuan from Zotero"
+  "lossBlockRef": "SiYuan block references and SiYuan links: cannot jump back to SiYuan from Zotero",
+  "insertCitation": "Insert citation",
+  "importAnnotations": "Import PDF annotations",
+  "exportContent": "Export citations or current document"
 }

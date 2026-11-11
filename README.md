@@ -27,6 +27,9 @@ A SiYuan desktop plugin for browsing a Zotero 10+ library, creating paper notes 
 - Paper documents carry `custom-zotero-*` attribute markers; bindings and automatic migration are resolved through SiYuan's database using those markers.
 - Migrates existing paper notes under a new root document automatically when the notebook or root document name changes, renaming same-title documents with an itemKey suffix.
 - Uses SiYuan theme variables for the Dock panel and buttons so it adapts to light, dark, and third-party themes.
+- Inserts numeric, author-date, or narrative citations from a multi-item selector and maintains a refreshable bibliography.
+- Imports PDF highlights, comments, page numbers, and Zotero deep links into a managed Note annotation section without changing other content.
+- Exports GB/T 7714, APA, IEEE, BibTeX/BibLaTeX, Typst, and LaTeX citations, plus Markdown, Word, and LaTeX documents.
 
 ## Requirements
 
@@ -58,7 +61,9 @@ The plugin is not yet listed in the SiYuan bazaar. Marketplace availability will
 5. Write in `Note`, click **Sync Note** in the button row below the item, review the Markdown preview, and confirm; or enable note auto-sync in the settings to upload changed notes automatically at the chosen interval.
 6. On the first sync, approve the write request in Zotero. Choose **Always Allow** if you want Zotero to remember the local authorization.
 
-Each item has the same row of four framed buttons below it: **Create/Open note**, **Refresh metadata**, **Sync Note**, and **Select in Zotero**. The last two are disabled until a note exists; clicking the item title also opens its document. Clicking the plugin icon in the top bar opens the settings page.
+Each item offers **Create/Open note**, **Refresh metadata**, **Sync Note**, **Import PDF annotations**, and **Select in Zotero**. Actions requiring an existing document stay disabled until it exists.
+
+The top-bar plugin menu opens the multi-item citation selector and export dialog. Citation links keep stable itemKeys, bibliographies are formatted by the Zotero Local API, and refreshes update only plugin-marked bibliography blocks. Bibliographies and the PDF annotation section are managed regions rebuilt on refresh; do not write content there that you need to preserve. Exports are static output, not editable Zotero fields in Word; complex custom CSL in-text rules are not guaranteed to be reproduced exactly.
 
 ## Synchronization and conversion
 

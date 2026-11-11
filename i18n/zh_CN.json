@@ -68,5 +68,8 @@
   "lossInlineStyle": "文字颜色等行内样式：样式将丢失，文字保留",
   "lossImageStyle": "图片尺寸与对齐属性：仅保留图片本身与替代文字",
   "lossIndent": "段落缩进：缩进样式将丢失，文字保留",
-  "lossBlockRef": "思源块引用与思源链接：在 Zotero 中无法跳转回思源"
+  "lossBlockRef": "思源块引用与思源链接：在 Zotero 中无法跳转回思源",
+  "insertCitation": "插入文献引用",
+  "importAnnotations": "导入 PDF 标注",
+  "exportContent": "导出引用或当前文档"
 }

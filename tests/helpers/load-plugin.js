@@ -2,6 +2,7 @@ const Module = require("module");
 
 const originalLoad = Module._load;
 const openedDocuments = [];
+let activeEditor = null;
 Module._load = function (request, parent, isMain) {
     if (request === "siyuan") {
         return {
@@ -9,7 +10,8 @@ Module._load = function (request, parent, isMain) {
             Dialog: class {},
             Setting: class {},
             showMessage: () => {},
-            openTab: async (options) => openedDocuments.push(options)
+            openTab: async (options) => openedDocuments.push(options),
+            getActiveEditor: () => activeEditor
         };
     }
     return originalLoad.call(this, request, parent, isMain);
@@ -66,4 +68,4 @@ function stubRemote(plugin, { items = [remoteItem()], collections = [remoteColle
     plugin.fetchAll = async (path) => path.includes("collections") ? collections : items;
 }
 
-module.exports = { makePlugin, remoteItem, remoteCollection, stubRemote, openedDocuments, PluginClass };
+module.exports = { makePlugin, remoteItem, remoteCollection, stubRemote, openedDocuments, PluginClass, setActiveEditor: (editor) => { activeEditor = editor; } };

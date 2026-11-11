@@ -203,3 +203,25 @@
   white-space: pre-wrap;
   margin-top: 8px;
 }
+
+.siyuan-plugin-zotero-notes__citation-list {
+  height: 360px;
+  overflow: auto;
+  margin: 12px 0;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+}
+
+.siyuan-plugin-zotero-notes__citation-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--b3-border-color);
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.siyuan-plugin-zotero-notes__citation-choice:hover {
+  background: var(--b3-list-hover);
+}
