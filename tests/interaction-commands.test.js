@@ -102,3 +102,15 @@ test("document tree menu supports recovery state and unload unsubscribes exact h
     assert.equal(plugin.eventBus.handlers["click-editortitleicon"], undefined);
     assert.equal(plugin.eventBus.handlers["open-menu-doctree"], undefined);
 });
+
+
+test("all command palette keys have bilingual labels", () => {
+    const fs = require("node:fs");
+    const zh = JSON.parse(fs.readFileSync("i18n/zh_CN.json", "utf8"));
+    const en = JSON.parse(fs.readFileSync("i18n/en.json", "utf8"));
+    const keys = ["openNotePicker", "openZoteroDock", "syncConnectedCitations", "importPapers", "advancedImport", "checkZoteroConnection", "openZoteroSettings"];
+    for (const key of keys) {
+        assert.ok(zh[key], `missing zh ${key}`);
+        assert.ok(en[key], `missing en ${key}`);
+    }
+});

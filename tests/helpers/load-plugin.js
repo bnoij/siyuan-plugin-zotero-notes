@@ -2,12 +2,32 @@ const Module = require("module");
 
 const originalLoad = Module._load;
 const openedDocuments = [];
+const dialogInstances = [];
 let activeEditor = null;
+function dialogElement() {
+    return {
+        textContent: "",
+        children: [],
+        classList: { add() {} },
+        append(...children) { this.children.push(...children); },
+        addEventListener() {},
+        querySelector() { return dialogElement(); },
+        querySelectorAll() { return []; },
+        focus() {}
+    };
+}
 Module._load = function (request, parent, isMain) {
     if (request === "siyuan") {
         return {
             Plugin: class {},
-            Dialog: class {},
+            Dialog: class {
+                constructor(options) {
+                    this.options = options;
+                    this.element = { querySelector: () => dialogElement() };
+                    dialogInstances.push(this);
+                }
+                destroy() { this.options.destroyCallback?.(); }
+            },
             Setting: class {},
             showMessage: () => {},
             openTab: async (options) => openedDocuments.push(options),
@@ -68,4 +88,4 @@ function stubRemote(plugin, { items = [remoteItem()], collections = [remoteColle
     plugin.fetchAll = async (path) => path.includes("collections") ? collections : items;
 }
 
-module.exports = { makePlugin, remoteItem, remoteCollection, stubRemote, openedDocuments, PluginClass, setActiveEditor: (editor) => { activeEditor = editor; } };
+module.exports = { makePlugin, remoteItem, remoteCollection, stubRemote, openedDocuments, dialogInstances, PluginClass, setActiveEditor: (editor) => { activeEditor = editor; } };

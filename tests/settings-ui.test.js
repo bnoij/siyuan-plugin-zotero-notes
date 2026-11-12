@@ -62,3 +62,14 @@ test("binding inspection runs only on demand and reports recoverable issues", as
     assert.equal(inspections, 1);
     assert.deepEqual(issues.map((issue) => issue.itemKey), ["PAPER001"]);
 });
+
+
+test("onDataChanged does not erase a draft while the settings surface is open", async () => {
+    const plugin = makePlugin();
+    plugin.settingsSurfaceOpen = true;
+    plugin.settingsDraft = { ...plugin.settings, rootName: "Unsaved draft" };
+    plugin.loadData = async (name) => name === "settings.json" ? { rootName: "External change" } : null;
+    plugin.syncSettingsControls = () => { throw new Error("must not refresh controls while editing"); };
+    await plugin.onDataChanged();
+    assert.equal(plugin.settingsDraft.rootName, "Unsaved draft");
+});

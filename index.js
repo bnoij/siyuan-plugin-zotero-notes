@@ -632,7 +632,7 @@ class ZoteroNotesPlugin extends Plugin {
         this.bindings = { ...this.bindings, ...(bindings && typeof bindings === "object" ? bindings : {}) };
         this.writeKeys = writeKeys && typeof writeKeys === "object" ? writeKeys : {};
         this.library = cacheToLibrary(cache) || { serverID: "", collections: [], items: [], importedAt: 0 };
-        if (!this.settingsEditing) {
+        if (!this.settingsSurfaceOpen && !this.settingsEditing) {
             this.settingsDraft = { ...this.settings };
             this.syncSettingsControls();
         }
@@ -1045,7 +1045,8 @@ class ZoteroNotesPlugin extends Plugin {
         this.setting = new Setting({
             width: "min(820px, calc(100vw - 32px))",
             height: "min(700px, calc(100dvh - 64px))",
-            confirmCallback: () => this.saveSettingsDraft()
+            confirmCallback: () => this.saveSettingsDraft(),
+            destroyCallback: () => { this.settingsSurfaceOpen = false; }
         });
         this.setting.addItem({
             title: "Zotero 笔记设置",
@@ -1055,6 +1056,7 @@ class ZoteroNotesPlugin extends Plugin {
     }
 
     buildSettingsSurface() {
+        this.settingsSurfaceOpen = true;
         const root = element("div", "siyuan-plugin-zotero-notes__settings");
         root.dataset.activeTab = this.activeSettingsTab;
         const tabs = element("div", "siyuan-plugin-zotero-notes__settings-tabs");
@@ -1537,9 +1539,10 @@ class ZoteroNotesPlugin extends Plugin {
 
     async recoverBindingDocument(item, binding, action, inspection) {
         return this.withOperationLock(item.key, async () => {
-            if (binding.noteDocId !== inspection.originalNoteDocId && ["rebuild-note", "rebind-note"].includes(action)) return binding;
-            if (binding.parentDocId !== inspection.originalParentDocId && ["rebuild-paper", "rebind-paper"].includes(action)) return binding;
-            const next = { ...binding };
+            await this.reloadBindingsFromStorage();
+            const stored = this.bindings[this.bindingKey(item.key)] || binding;
+            if (stored.parentDocId !== inspection.originalParentDocId || stored.noteDocId !== inspection.originalNoteDocId) return stored;
+            const next = { ...stored };
             if (action === "rebuild-note") {
                 if (inspection.noteExists) throw new Error("已有 Note 可重新绑定，请选择重新绑定而不是新建");
                 if (!inspection.boundParentExists) throw new Error("论文页不存在，请先恢复论文页");
@@ -1615,7 +1618,8 @@ class ZoteroNotesPlugin extends Plugin {
             const dialog = new Dialog({
                 title: inspection.recoveryMode === "note" ? `恢复 Note / ${itemTitle(item)}` : `恢复论文笔记 / ${itemTitle(item)}`,
                 content: `<div class="b3-dialog__content siyuan-plugin-zotero-notes__dialog-body"><p class="siyuan-plugin-zotero-notes__hint"></p><p class="siyuan-plugin-zotero-notes__path"></p><p class="siyuan-plugin-zotero-notes__error" role="alert"></p></div><div class="b3-dialog__action" data-recovery-actions></div>`,
-                width: "min(560px, calc(100vw - 24px))"
+                width: "min(560px, calc(100vw - 24px))",
+                destroyCallback: () => resolve({ status: "cancelled" })
             });
             this.prepareDialog(dialog);
             dialog.element.querySelector(".siyuan-plugin-zotero-notes__hint").textContent = inspection.recoveryMode === "note"

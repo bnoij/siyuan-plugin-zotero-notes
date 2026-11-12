@@ -72,6 +72,15 @@ Each item offers **Create/Open note**, **Refresh metadata**, **Sync Note**, **Im
 
 The top-bar plugin menu opens the multi-item citation selector and export dialog. Citation links keep stable itemKeys, bibliographies are formatted by the Zotero Local API, and refreshes update only plugin-marked bibliography blocks. Bibliographies and the PDF annotation section are managed regions rebuilt on refresh; do not write content there that you need to preserve. Exports are static output, not editable Zotero fields in Word; complex custom CSL in-text rules are not guaranteed to be reproduced exactly.
 
+## Interaction and recovery (0.5.1)
+
+- In the editor, use `/zotero` to insert a citation, `/znote` to create or open a paper Note, and `/zexport` to export. The top-bar menu, command palette, document-title menu, and document-tree menu expose the same workflows.
+- When a Note is missing, opening the item shows a recovery dialog. Rebuild the Note, claim an exact-path Note not owned by another item, or open only the paper page. Claiming preserves existing content and never changes the Zotero child note.
+- When a paper page is missing, explicitly confirm rebuilding it with a new Note. An ordinary same-title document is claimed only after confirmation; documents bound to another item are never rebound. Deleted content cannot be restored by the plugin.
+- **Advanced → Check broken bindings** inspects only on demand and opens the recovery flow for each issue; no background binding scan runs.
+- Settings are grouped into Basic, Sync, Writing, Translation, and Advanced. Switching tabs does not save. Translation now exposes per-document request concurrency.
+- The Dock keeps one primary action and moves secondary operations into **More**. Settings and dialogs use scrolling content, persistent actions, and single-column fields in narrow containers.
+
 ## Synchronization and conversion
 
 Synchronization is **SiYuan `Note` → Zotero child note**, not real-time two-way sync.

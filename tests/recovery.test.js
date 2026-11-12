@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { makePlugin, remoteItem, openedDocuments } = require("./helpers/load-plugin.js");
+const { makePlugin, remoteItem, openedDocuments, dialogInstances } = require("./helpers/load-plugin.js");
 
 const ITEM = "PAPER001";
 const SERVER = "server";
@@ -177,4 +177,45 @@ test("stale block attributes do not prove a deleted document exists", async () =
     assert.equal(inspection.boundParentExists, false);
     assert.equal(inspection.noteExists, false);
     assert.equal(inspection.boundNoteExists, false);
+});
+
+
+test("closing recovery with the native dialog destroy resolves cancellation", { timeout: 1000 }, async () => {
+    const { plugin, item, binding } = setupPlugin({ noteExists: false });
+    const inspection = await plugin.inspectBindingDocuments(binding, item);
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+        createElement: () => ({
+            append() {},
+            addEventListener() {},
+            setAttribute() {},
+            classList: { add() {} },
+            textContent: ""
+        })
+    };
+    try {
+        const pending = plugin.openBindingRecovery(item, binding, inspection);
+        dialogInstances.at(-1).destroy();
+        assert.equal((await pending).status, "cancelled");
+    } finally {
+        globalThis.document = previousDocument;
+    }
+});
+
+test("stale recovery in a second window reuses the stored recovered binding", async () => {
+    const first = setupPlugin({ noteExists: false });
+    const second = setupPlugin({ noteExists: false });
+    const sharedStore = {};
+    for (const plugin of [first.plugin, second.plugin]) {
+        plugin.loadData = async () => sharedStore;
+        plugin.saveData = async (name, value) => {
+            if (name === "bindings.json") Object.assign(sharedStore, value);
+        };
+    }
+    const inspection = await second.plugin.inspectBindingDocuments(second.binding, second.item);
+    await first.plugin.recoverBindingDocument(first.item, first.binding, "rebuild-note", inspection);
+    const before = second.calls.length;
+    const result = await second.plugin.recoverBindingDocument(second.item, second.binding, "rebuild-note", inspection);
+    assert.equal(result.noteDocId, "new-note");
+    assert.equal(second.calls.slice(before).filter((call) => call.url === "/api/filetree/createDocWithMd").length, 0);
 });

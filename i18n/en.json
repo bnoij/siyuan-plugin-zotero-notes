@@ -71,5 +71,12 @@
   "lossBlockRef": "SiYuan block references and SiYuan links: cannot jump back to SiYuan from Zotero",
   "insertCitation": "Insert citation",
   "importAnnotations": "Import PDF annotations",
-  "exportContent": "Export citations or current document"
+  "exportContent": "Export citations or current document",
+  "openNotePicker": "Create or open Zotero Note",
+  "openZoteroDock": "Open Zotero library",
+  "syncConnectedCitations": "Connected citations",
+  "importPapers": "Import papers",
+  "advancedImport": "Retrieve or import PDF",
+  "checkZoteroConnection": "Check Zotero connection",
+  "openZoteroSettings": "Open Zotero Notes settings"
 }

@@ -71,5 +71,12 @@
   "lossBlockRef": "思源块引用与思源链接：在 Zotero 中无法跳转回思源",
   "insertCitation": "插入文献引用",
   "importAnnotations": "导入 PDF 标注",
-  "exportContent": "导出引用或当前文档"
+  "exportContent": "导出引用或当前文档",
+  "openNotePicker": "创建或打开 Zotero Note",
+  "openZoteroDock": "打开 Zotero 文库",
+  "syncConnectedCitations": "统一多页引用",
+  "importPapers": "导入文献",
+  "advancedImport": "检索或导入 PDF",
+  "checkZoteroConnection": "检查 Zotero 连接",
+  "openZoteroSettings": "打开 Zotero 笔记设置"
 }
