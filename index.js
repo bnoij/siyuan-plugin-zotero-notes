@@ -1,4 +1,4 @@
-const { Plugin, Dialog, Menu, Setting, showMessage, openTab, getActiveEditor } = require("siyuan");
+const { Plugin, Dialog, Menu, Setting, showMessage, openTab, getActiveEditor, openSetting: openSiYuanSetting } = require("siyuan");
 
 const PLUGIN_NAME = "siyuan-plugin-zotero-notes";
 const ZOTERO_API = "http://127.0.0.1:23119/api";
@@ -631,23 +631,9 @@ class ZoteroNotesPlugin extends Plugin {
         this.bindings = { ...this.bindings, ...(bindings && typeof bindings === "object" ? bindings : {}) };
         this.writeKeys = writeKeys && typeof writeKeys === "object" ? writeKeys : {};
         this.library = cacheToLibrary(cache) || { serverID: "", collections: [], items: [], importedAt: 0 };
-        if (this.settingControls) {
-            this.settingControls.notebookSelect.value = this.settings.notebook;
-            this.settingControls.rootInput.value = this.settings.rootName;
-            this.settingControls.autoImport.checked = this.settings.autoImport;
-            this.settingControls.authorLimitInput.value = this.settings.authorLimit;
-            this.settingControls.librarySyncInput.value = this.settings.librarySyncInterval;
-            this.settingControls.noteSyncInput.value = this.settings.noteSyncInterval;
-            this.settingControls.syncModeSelect.value = this.settings.syncMode;
-            this.settingControls.workflowQueueEnabled.checked = this.settings.workflowQueueEnabled;
-            this.settingControls.citationStyleSelect.value = this.settings.citationStyle;
-            this.settingControls.citationFormSelect.value = this.settings.citationForm;
-            this.settingControls.noteTemplateInput.value = this.settings.noteTemplate;
-            this.settingControls.pdf2zhPathInput.value = this.settings.pdf2zhPath;
-            this.settingControls.translationSourceInput.value = this.settings.translationSource;
-            this.settingControls.translationTargetInput.value = this.settings.translationTarget;
-            this.settingControls.translationConcurrencyInput.value = this.settings.translationConcurrency;
-            this.settingControls.translationSecretNamesInput.value = this.settings.translationSecretNames.join(", ");
+        if (!this.settingsEditing) {
+            this.settingsDraft = { ...this.settings };
+            this.syncSettingsControls();
         }
         this.startAutoSync();
         this.stopWorkflowQueue();
@@ -1016,204 +1002,215 @@ class ZoteroNotesPlugin extends Plugin {
         }
     }
 
+    settingsTabs() {
+        return [
+            { id: "basic", label: "基础", fields: [
+                { key: "notebook", label: this.t("notebook"), type: "notebook", hint: this.t("notebookTip") },
+                { key: "rootName", label: this.t("rootName"), type: "text", hint: this.t("rootNameTip") },
+                { key: "authorLimit", label: this.t("authorLimit"), type: "number", min: 0, max: 99, hint: this.t("authorLimitTip") },
+                { key: "testConnection", label: this.t("testConnection"), type: "action" }
+            ] },
+            { id: "sync", label: "同步", fields: [
+                { key: "autoImport", label: this.t("autoImport"), type: "checkbox", hint: this.t("autoImportTip") },
+                { key: "syncMode", label: this.t("syncMode"), type: "select", options: [["incremental", this.t("syncIncremental")], ["full", this.t("syncFull")]] },
+                { key: "librarySyncInterval", label: this.t("librarySyncInterval"), type: "number", min: 0, max: 1440 },
+                { key: "noteSyncInterval", label: this.t("noteSyncInterval"), type: "number", min: 0, max: 1440 },
+                { key: "workflowQueueEnabled", label: this.t("workflowQueueEnabled"), type: "checkbox", hint: this.t("workflowQueueEnabledTip") }
+            ] },
+            { id: "writing", label: "写作", fields: [
+                { key: "citationStyle", label: "引用样式", type: "select", options: [["ieee", "IEEE"], ["apa", "APA 7"], ["china-national-standard-gb-t-7714-2015-numeric", "GB/T 7714"]] },
+                { key: "citationForm", label: "正文引用形式", type: "select", options: [["numeric", "Numeric"], ["author-date", "Author-date"], ["narrative", "Narrative"]] },
+                { key: "noteTemplate", label: "Note 初始模板", type: "textarea", hint: "只用于新建 Note；恢复或认领不会改写已有内容。" }
+            ] },
+            { id: "translation", label: "翻译", fields: [
+                { key: "pdf2zhPath", label: "pdf2zh 可执行文件", type: "text" },
+                { key: "translationSource", label: "翻译源语言", type: "text" },
+                { key: "translationTarget", label: "翻译目标语言", type: "text" },
+                { key: "translationConcurrency", label: "同时翻译篇数（1–8）", type: "number", min: 1, max: 8 },
+                { key: "translationDualConcurrency", label: "每篇请求并发数（1–128）", type: "number", min: 1, max: 128 },
+                { key: "translationSecretNames", label: "翻译密钥名称", type: "text", hint: "只保存变量名；密钥值从思源密钥库读取。" },
+                { key: "openSecrets", label: "打开密钥和变量设置", type: "action" }
+            ] },
+            { id: "advanced", label: "高级", fields: [
+                { key: "bindingCheck", label: "检查失效绑定", type: "action", hint: "仅在点击后检查，不进行后台批量探测。" }
+            ] }
+        ];
+    }
+
     initSetting() {
-        const notebookSelect = document.createElement("select");
-        notebookSelect.className = "b3-select fn__block";
-        const rootInput = document.createElement("input");
-        rootInput.className = "b3-text-field fn__block";
-        rootInput.value = this.settings.rootName;
-        const autoImport = document.createElement("input");
-        autoImport.type = "checkbox";
-        autoImport.checked = this.settings.autoImport;
-        const authorLimitInput = document.createElement("input");
-        authorLimitInput.type = "number";
-        authorLimitInput.min = "0";
-        authorLimitInput.max = "99";
-        authorLimitInput.className = "b3-text-field fn__block";
-        authorLimitInput.value = this.settings.authorLimit;
-        const librarySyncInput = document.createElement("input");
-        librarySyncInput.type = "number";
-        librarySyncInput.min = "0";
-        librarySyncInput.max = "1440";
-        librarySyncInput.className = "b3-text-field fn__block";
-        librarySyncInput.value = this.settings.librarySyncInterval;
-        const noteSyncInput = document.createElement("input");
-        noteSyncInput.type = "number";
-        noteSyncInput.min = "0";
-        noteSyncInput.max = "1440";
-        noteSyncInput.className = "b3-text-field fn__block";
-        noteSyncInput.value = this.settings.noteSyncInterval;
-        const workflowQueueEnabled = document.createElement("input");
-        workflowQueueEnabled.type = "checkbox";
-        workflowQueueEnabled.checked = this.settings.workflowQueueEnabled;
-        const syncModeSelect = document.createElement("select");
-        syncModeSelect.className = "b3-select fn__block";
-        [["incremental", this.t("syncIncremental")], ["full", this.t("syncFull")]].forEach(([value, label]) => {
-            const option = document.createElement("option");
-            option.value = value;
-            option.textContent = label;
-            syncModeSelect.append(option);
+        this.settingsDraft = { ...this.settings };
+        this.activeSettingsTab = "basic";
+        this.settingControls = {};
+        this.setting = new Setting({
+            width: "min(820px, calc(100vw - 32px))",
+            height: "min(700px, calc(100dvh - 64px))",
+            confirmCallback: () => this.saveSettingsDraft()
         });
-        syncModeSelect.value = this.settings.syncMode;
-        const citationStyleSelect = document.createElement("select");
-        citationStyleSelect.className = "b3-select fn__block";
-        [["ieee", "IEEE"], ["apa", "APA 7"], ["china-national-standard-gb-t-7714-2015-numeric", "GB/T 7714"]].forEach(([value, label]) => {
-            citationStyleSelect.append(new Option(label, value));
+        this.setting.addItem({
+            title: "Zotero 笔记设置",
+            direction: "column",
+            createActionElement: () => this.buildSettingsSurface()
         });
-        citationStyleSelect.value = this.settings.citationStyle;
-        const citationFormSelect = document.createElement("select");
-        citationFormSelect.className = "b3-select fn__block";
-        [["numeric", "Numeric"], ["author-date", "Author-date"], ["narrative", "Narrative"]].forEach(([value, label]) => {
-            citationFormSelect.append(new Option(label, value));
+    }
+
+    buildSettingsSurface() {
+        const root = element("div", "siyuan-plugin-zotero-notes__settings");
+        root.dataset.activeTab = this.activeSettingsTab;
+        const tabs = element("div", "siyuan-plugin-zotero-notes__settings-tabs");
+        tabs.setAttribute("role", "tablist");
+        tabs.setAttribute("aria-label", "Zotero 笔记设置");
+        const body = element("div", "siyuan-plugin-zotero-notes__settings-body");
+        for (const tab of this.settingsTabs()) {
+            const button = element("button", "siyuan-plugin-zotero-notes__settings-tab", tab.label);
+            button.type = "button";
+            button.dataset.tab = tab.id;
+            button.setAttribute("role", "tab");
+            button.addEventListener("click", () => this.selectSettingsTab(tab.id));
+            tabs.append(button);
+            const panel = element("section", "siyuan-plugin-zotero-notes__settings-panel");
+            panel.dataset.panel = tab.id;
+            panel.setAttribute("role", "tabpanel");
+            for (const field of tab.fields) panel.append(this.createSettingsField(field));
+            body.append(panel);
+        }
+        root.append(tabs, body);
+        this.settingsRoot = root;
+        this.selectSettingsTab(this.activeSettingsTab);
+        return root;
+    }
+
+    createSettingsField(field) {
+        const wrapper = element("label", "siyuan-plugin-zotero-notes__settings-field");
+        const text = element("span", "siyuan-plugin-zotero-notes__settings-label", field.label);
+        wrapper.append(text);
+        if (field.type === "action") {
+            const button = element("button", "b3-button b3-button--outline", field.label);
+            button.type = "button";
+            if (field.key === "testConnection") button.addEventListener("click", () => this.checkZoteroConnection().catch((error) => showMessage(errorMessage(error), 8000)));
+            if (field.key === "openSecrets") button.addEventListener("click", () => this.openSecretsVariables());
+            if (field.key === "bindingCheck") button.addEventListener("click", () => this.openBindingIssueDialog());
+            wrapper.append(button);
+        } else {
+            let control;
+            if (field.type === "select" || field.type === "notebook") {
+                control = document.createElement("select");
+                control.className = "b3-select";
+                if (field.type === "notebook") this.loadNotebooks(control).catch((error) => showMessage(errorMessage(error)));
+                else for (const [value, label] of field.options) control.append(new Option(label, value));
+            } else if (field.type === "textarea") {
+                control = document.createElement("textarea");
+                control.className = "b3-text-field";
+                control.rows = 7;
+            } else {
+                control = document.createElement("input");
+                control.className = "b3-text-field";
+                control.type = field.type === "checkbox" ? "checkbox" : field.type === "number" ? "number" : "text";
+                if (field.min !== undefined) control.min = String(field.min);
+                if (field.max !== undefined) control.max = String(field.max);
+            }
+            control.dataset.key = field.key;
+            const value = this.settingsDraft[field.key];
+            if (field.type === "checkbox") control.checked = !!value;
+            else control.value = field.key === "translationSecretNames" ? (value || []).join(", ") : value ?? "";
+            control.addEventListener("focus", () => { this.settingsEditing = true; });
+            control.addEventListener("blur", () => { this.settingsEditing = false; });
+            const update = () => {
+                this.settingsDraft[field.key] = field.type === "checkbox" ? control.checked : control.value;
+            };
+            control.addEventListener("input", update);
+            control.addEventListener("change", update);
+            wrapper.append(control);
+            this.settingControls[field.key] = control;
+        }
+        if (field.hint) wrapper.append(element("small", "siyuan-plugin-zotero-notes__settings-hint", field.hint));
+        return wrapper;
+    }
+
+    selectSettingsTab(tabId) {
+        this.activeSettingsTab = tabId;
+        if (!this.settingsRoot) return;
+        this.settingsRoot.dataset.activeTab = tabId;
+        for (const button of this.settingsRoot.querySelectorAll("[data-tab]")) {
+            const active = button.dataset.tab === tabId;
+            button.dataset.active = String(active);
+            button.setAttribute("aria-selected", String(active));
+            button.tabIndex = active ? 0 : -1;
+        }
+        for (const panel of this.settingsRoot.querySelectorAll("[data-panel]")) {
+            const active = panel.dataset.panel === tabId;
+            panel.dataset.active = String(active);
+            panel.hidden = !active;
+            panel.setAttribute("aria-hidden", String(!active));
+        }
+    }
+
+    syncSettingsControls() {
+        if (!this.settingControls) return;
+        for (const [key, control] of Object.entries(this.settingControls)) {
+            const value = this.settings[key];
+            if (control.type === "checkbox") control.checked = !!value;
+            else control.value = key === "translationSecretNames" ? (value || []).join(", ") : value ?? "";
+        }
+    }
+
+    async saveSettingsDraft() {
+        const previous = { notebook: this.settings.notebook, rootName: this.settings.rootName };
+        this.settings = this.normalizeSettings({ ...this.settings, ...this.settingsDraft });
+        this.settingsDraft = { ...this.settings };
+        await this.saveData("settings.json", this.settings);
+        this.syncSettingsControls();
+        this.startAutoSync();
+        this.stopWorkflowQueue();
+        this.startWorkflowQueue();
+        if (previous.notebook !== this.settings.notebook || previous.rootName !== this.settings.rootName) {
+            this.enqueue(() => this.migrateBindings());
+        }
+    }
+
+    openSecretsVariables() {
+        try {
+            const target = openSiYuanSetting(this.app)?.element.querySelector('.config__side [data-name="secretsVariables"]');
+            if (!target) throw new Error("missing secrets tab");
+            target.click();
+        } catch {
+            showMessage("请在思源设置中选择「密钥和变量」，然后在此处只填写变量名称。", 6000);
+        }
+    }
+
+    async inspectBindingIssues() {
+        const issues = [];
+        for (const binding of Object.values(this.bindings)) {
+            const item = this.library.items.find((candidate) => candidate.key === binding.itemKey);
+            if (!item) continue;
+            const inspection = await this.inspectBindingDocuments(binding, item);
+            if (!inspection.boundParentExists || !inspection.boundNoteExists) issues.push({ item, binding, inspection, itemKey: item.key });
+        }
+        return issues;
+    }
+
+    async openBindingIssueDialog() {
+        const issues = await this.inspectBindingIssues();
+        const dialog = new Dialog({
+            title: "失效绑定检查",
+            content: `<div class="b3-dialog__content siyuan-plugin-zotero-notes__dialog-body" data-binding-issues></div>`,
+            width: "min(640px, calc(100vw - 24px))"
         });
-        citationFormSelect.value = this.settings.citationForm;
-        const noteTemplateInput = document.createElement("textarea");
-        noteTemplateInput.className = "b3-text-field fn__block";
-        noteTemplateInput.rows = 6;
-        noteTemplateInput.value = this.settings.noteTemplate;
-        const pdf2zhPathInput = document.createElement("input");
-        pdf2zhPathInput.className = "b3-text-field fn__block";
-        pdf2zhPathInput.value = this.settings.pdf2zhPath;
-        const translationSourceInput = document.createElement("input");
-        translationSourceInput.className = "b3-text-field fn__block";
-        translationSourceInput.value = this.settings.translationSource;
-        const translationTargetInput = document.createElement("input");
-        translationTargetInput.className = "b3-text-field fn__block";
-        translationTargetInput.value = this.settings.translationTarget;
-        const translationConcurrencyInput = document.createElement("input");
-        translationConcurrencyInput.type = "number";
-        translationConcurrencyInput.min = "1";
-        translationConcurrencyInput.max = "8";
-        translationConcurrencyInput.className = "b3-text-field fn__block";
-        translationConcurrencyInput.value = this.settings.translationConcurrency;
-        const translationSecretNamesInput = document.createElement("input");
-        translationSecretNamesInput.className = "b3-text-field fn__block";
-        translationSecretNamesInput.placeholder = "OPENAI_API_KEY, GEMINI_API_KEY";
-        translationSecretNamesInput.value = this.settings.translationSecretNames.join(", ");
-        this.settingControls = { notebookSelect, rootInput, autoImport, authorLimitInput, librarySyncInput, noteSyncInput, syncModeSelect, workflowQueueEnabled, citationStyleSelect, citationFormSelect, noteTemplateInput, pdf2zhPathInput, translationSourceInput, translationTargetInput, translationConcurrencyInput, translationSecretNamesInput };
-        const save = async () => {
-            const previous = { notebook: this.settings.notebook, rootName: this.settings.rootName };
-            this.settings = this.normalizeSettings({
-                ...this.settings,
-                notebook: notebookSelect.value,
-                rootName: rootInput.value,
-                autoImport: autoImport.checked,
-                authorLimit: authorLimitInput.value,
-                librarySyncInterval: librarySyncInput.value,
-                noteSyncInterval: noteSyncInput.value,
-                syncMode: syncModeSelect.value,
-                workflowQueueEnabled: workflowQueueEnabled.checked,
-                citationStyle: citationStyleSelect.value,
-                citationForm: citationFormSelect.value,
-                noteTemplate: noteTemplateInput.value,
-                pdf2zhPath: pdf2zhPathInput.value,
-                translationSource: translationSourceInput.value,
-                translationTarget: translationTargetInput.value,
-                translationConcurrency: translationConcurrencyInput.value,
-                translationSecretNames: translationSecretNamesInput.value
+        const list = dialog.element.querySelector("[data-binding-issues]");
+        if (!issues.length) {
+            list.append(element("p", "siyuan-plugin-zotero-notes__empty", "未发现缺失的论文页或 Note。"));
+            return;
+        }
+        for (const issue of issues) {
+            const row = element("div", "siyuan-plugin-zotero-notes__binding-issue");
+            row.append(element("strong", "", itemTitle(issue.item)));
+            const button = element("button", "b3-button b3-button--outline", "恢复");
+            button.addEventListener("click", () => {
+                dialog.destroy();
+                this.openBindingRecovery(issue.item, issue.binding, issue.inspection);
             });
-            authorLimitInput.value = this.settings.authorLimit;
-            librarySyncInput.value = this.settings.librarySyncInterval;
-            noteSyncInput.value = this.settings.noteSyncInterval;
-            await this.saveData("settings.json", this.settings);
-            this.startAutoSync();
-            this.stopWorkflowQueue();
-            this.startWorkflowQueue();
-            if (previous.notebook !== this.settings.notebook || previous.rootName !== this.settings.rootName) {
-                this.enqueue(() => this.migrateBindings());
-            }
-        };
-        this.setting = new Setting({ confirmCallback: save });
-        this.setting.addItem({
-            title: this.t("notebook"),
-            description: this.t("notebookTip"),
-            createActionElement: () => notebookSelect
-        });
-        this.setting.addItem({
-            title: this.t("rootName"),
-            description: this.t("rootNameTip"),
-            actionElement: rootInput
-        });
-        this.setting.addItem({
-            title: this.t("autoImport"),
-            description: this.t("autoImportTip"),
-            actionElement: autoImport
-        });
-        this.setting.addItem({
-            title: this.t("authorLimit"),
-            description: this.t("authorLimitTip"),
-            actionElement: authorLimitInput
-        });
-        this.setting.addItem({
-            title: this.t("librarySyncInterval"),
-            description: this.t("librarySyncIntervalTip"),
-            actionElement: librarySyncInput
-        });
-        this.setting.addItem({
-            title: this.t("noteSyncInterval"),
-            description: this.t("noteSyncIntervalTip"),
-            actionElement: noteSyncInput
-        });
-        this.setting.addItem({
-            title: this.t("syncMode"),
-            description: this.t("syncModeTip"),
-            actionElement: syncModeSelect
-        });
-        this.setting.addItem({
-            title: "Citation style / 引用样式",
-            actionElement: citationStyleSelect
-        });
-        this.setting.addItem({
-            title: "Citation form / 正文引用形式",
-            actionElement: citationFormSelect
-        });
-        this.setting.addItem({
-            title: this.t("workflowQueueEnabled"),
-            description: this.t("workflowQueueEnabledTip"),
-            actionElement: workflowQueueEnabled
-        });
-        this.setting.addItem({
-            title: "Note 初始模板",
-            description: "仅支持 {{title}}、{{authors}}、{{year}}、{{journal}}、{{DOI}}、{{abstract}}、{{tags}}、{{noteLink}}、{{itemKey}} 及 if/range 控制结构；只用于新建 Note。",
-            actionElement: noteTemplateInput
-        });
-        this.setting.addItem({ title: "pdf2zh 可执行文件", actionElement: pdf2zhPathInput });
-        this.setting.addItem({ title: "翻译源语言", actionElement: translationSourceInput });
-        this.setting.addItem({ title: "翻译目标语言", actionElement: translationTargetInput });
-        this.setting.addItem({ title: "同时翻译篇数", description: "1–8 篇，批量任务按此并发运行", actionElement: translationConcurrencyInput });
-        this.setting.addItem({ title: "翻译密钥名称", description: "逗号分隔的环境变量名；密钥值只从思源「设置 → 密钥和变量」读取，不保存在插件设置中。", actionElement: translationSecretNamesInput });
-        const testButton = element("button", "b3-button b3-button--outline", this.t("testConnection"));
-        testButton.addEventListener("click", async () => {
-            testButton.disabled = true;
-            try {
-                const result = await this.zoteroPage(`${USER_PREFIX}/items?limit=1`);
-                if (!result.serverID) throw new Error("Zotero 10+ required");
-                await this.refreshLibrary(false);
-                showMessage(this.t("connectionSuccess"));
-            } catch (error) {
-                showMessage(`${this.t("connectionFailed")} ${errorMessage(error)}`, 8000);
-            } finally {
-                testButton.disabled = false;
-            }
-        });
-        this.setting.addItem({ title: this.t("testConnection"), actionElement: testButton });
-        this.loadNotebooks(notebookSelect).catch((error) => showMessage(errorMessage(error)));
-        notebookSelect.addEventListener("change", save);
-        rootInput.addEventListener("change", save);
-        autoImport.addEventListener("change", save);
-        authorLimitInput.addEventListener("change", save);
-        librarySyncInput.addEventListener("change", save);
-        noteSyncInput.addEventListener("change", save);
-        syncModeSelect.addEventListener("change", save);
-        workflowQueueEnabled.addEventListener("change", save);
-        citationStyleSelect.addEventListener("change", save);
-        citationFormSelect.addEventListener("change", save);
-        noteTemplateInput.addEventListener("change", save);
-        pdf2zhPathInput.addEventListener("change", save);
-        translationSourceInput.addEventListener("change", save);
-        translationTargetInput.addEventListener("change", save);
-        translationConcurrencyInput.addEventListener("change", save);
-        translationSecretNamesInput.addEventListener("change", save);
+            row.append(button);
+            list.append(row);
+        }
     }
 
     async loadNotebooks(select) {
