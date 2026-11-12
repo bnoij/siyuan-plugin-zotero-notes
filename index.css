@@ -225,3 +225,205 @@
 .siyuan-plugin-zotero-notes__citation-choice:hover {
   background: var(--b3-list-hover);
 }
+
+
+.siyuan-plugin-zotero-notes__dialog {
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 64px);
+  min-height: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.siyuan-plugin-zotero-notes__dialog > .b3-dialog__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.siyuan-plugin-zotero-notes__dialog-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  scrollbar-gutter: stable;
+}
+
+.siyuan-plugin-zotero-notes__dialog-action {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--b3-border-color);
+  background: var(--b3-theme-background);
+}
+
+.siyuan-plugin-zotero-notes__dialog-action button {
+  margin: 0;
+  white-space: normal;
+}
+
+.siyuan-plugin-zotero-notes__settings {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.siyuan-plugin-zotero-notes__settings-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--b3-border-color);
+}
+
+.siyuan-plugin-zotero-notes__settings-tab {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--b3-theme-on-background);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.siyuan-plugin-zotero-notes__settings-tab[data-active="true"] {
+  color: var(--b3-theme-primary);
+  box-shadow: inset 0 -2px var(--b3-theme-primary);
+}
+
+.siyuan-plugin-zotero-notes__settings-tab:focus-visible {
+  outline: 1px solid var(--b3-theme-primary);
+  outline-offset: -2px;
+}
+
+.siyuan-plugin-zotero-notes__settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 24px;
+}
+
+.siyuan-plugin-zotero-notes__settings-panel[hidden] {
+  display: none !important;
+}
+
+.siyuan-plugin-zotero-notes__settings-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 280px);
+  gap: 8px 24px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--b3-border-color);
+}
+
+.siyuan-plugin-zotero-notes__settings-field input:not([type="checkbox"]),
+.siyuan-plugin-zotero-notes__settings-field select,
+.siyuan-plugin-zotero-notes__settings-field textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.siyuan-plugin-zotero-notes__settings-label {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.siyuan-plugin-zotero-notes__settings-hint {
+  grid-column: 1 / -1;
+  color: var(--b3-theme-on-surface);
+  line-height: 1.6;
+}
+
+.siyuan-plugin-zotero-notes__picker {
+  max-height: min(420px, 60dvh);
+  margin-top: 12px;
+  overflow-y: auto;
+}
+
+.siyuan-plugin-zotero-notes__picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--b3-border-color);
+  background: transparent;
+  color: var(--b3-theme-on-background);
+  text-align: left;
+  cursor: pointer;
+}
+
+.siyuan-plugin-zotero-notes__picker-item:hover,
+.siyuan-plugin-zotero-notes__picker-item:focus-visible {
+  background: var(--b3-list-hover);
+}
+
+.siyuan-plugin-zotero-notes__picker-title,
+.siyuan-plugin-zotero-notes__path {
+  overflow-wrap: anywhere;
+}
+
+.siyuan-plugin-zotero-notes__binding-issue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--b3-border-color);
+}
+
+.siyuan-plugin-zotero-notes__binding-issue strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.siyuan-plugin-zotero-notes__error {
+  color: var(--b3-theme-error);
+}
+
+.siyuan-plugin-zotero-notes__action--overflow {
+  flex: 0 0 auto;
+  min-width: 56px;
+}
+
+@container (max-width: 600px) {
+  .siyuan-plugin-zotero-notes__settings-body {
+    padding: 16px;
+  }
+
+  .siyuan-plugin-zotero-notes__settings-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+}
+
+@container (max-width: 420px) {
+  .siyuan-plugin-zotero-notes__settings-tabs {
+    padding-inline: 8px;
+  }
+
+  .siyuan-plugin-zotero-notes__settings-tab {
+    padding-inline: 10px;
+  }
+
+  .siyuan-plugin-zotero-notes__dialog-action {
+    justify-content: flex-start;
+  }
+}

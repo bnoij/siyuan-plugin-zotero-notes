@@ -435,6 +435,7 @@ class ZoteroNotesPlugin extends Plugin {
             width: "min(680px, calc(100vw - 24px))",
             height: "min(560px, calc(100dvh - 64px))"
         });
+        this.prepareDialog(dialog);
         const input = dialog.element.querySelector("[data-note-search]");
         const results = dialog.element.querySelector("[data-note-results]");
         const render = () => {
@@ -1195,6 +1196,7 @@ class ZoteroNotesPlugin extends Plugin {
             content: `<div class="b3-dialog__content siyuan-plugin-zotero-notes__dialog-body" data-binding-issues></div>`,
             width: "min(640px, calc(100vw - 24px))"
         });
+        this.prepareDialog(dialog);
         const list = dialog.element.querySelector("[data-binding-issues]");
         if (!issues.length) {
             list.append(element("p", "siyuan-plugin-zotero-notes__empty", "未发现缺失的论文页或 Note。"));
@@ -1351,6 +1353,43 @@ class ZoteroNotesPlugin extends Plugin {
         return row;
     }
 
+    prepareDialog(dialog) {
+        const container = dialog.element.querySelector(".b3-dialog__container") || dialog.element;
+        container.classList.add("siyuan-plugin-zotero-notes__dialog");
+        dialog.element.querySelector(".b3-dialog__content")?.classList.add("siyuan-plugin-zotero-notes__dialog-body");
+        dialog.element.querySelector(".b3-dialog__action")?.classList.add("siyuan-plugin-zotero-notes__dialog-action");
+        return dialog;
+    }
+
+    dockActionModel(item, binding) {
+        const recovering = this.recoveryRequired?.has(item.key);
+        const primary = {
+            id: recovering ? "recover" : binding ? "open" : "create",
+            icon: "#zoteroNotesIconNote",
+            label: recovering ? "恢复 Note" : binding ? this.t("openNote") : this.t("newNote"),
+            title: recovering ? "恢复缺失的 Note" : binding ? this.t("openNote") : this.t("newNote"),
+            onClick: () => this.enqueue(() => this.createOrOpen(item))
+        };
+        return {
+            primary,
+            secondary: [
+                { icon: "#zoteroNotesIconRefresh", label: this.t("refreshMetadata"), disabled: !binding, onClick: () => this.enqueue(() => this.refreshMetadata(item)) },
+                { icon: "#zoteroNotesIconUpload", label: this.t("syncNote"), disabled: !binding?.noteDocId, onClick: () => this.enqueue(() => this.previewNoteSync(item)) },
+                { icon: "#zoteroNotesIconNote", label: this.t("importAnnotations"), disabled: !binding?.noteDocId, onClick: () => this.enqueue(() => this.importAnnotations(item)) },
+                { icon: "#zoteroNotesIconRefresh", label: "翻译 / Translate", disabled: !binding?.noteDocId, onClick: () => this.openTranslationDialog(item) },
+                { icon: "#zoteroNotesIconZotero", label: this.t("openZotero"), disabled: false, onClick: () => window.open(`zotero://select/library/items/${item.key}`) }
+            ]
+        };
+    }
+
+    openItemOverflow(event, model) {
+        const menu = new Menu("zotero-notes-item-menu");
+        for (const action of model.secondary) {
+            menu.addItem({ icon: "iconPlugin", label: action.label, disabled: action.disabled, click: action.onClick });
+        }
+        menu.open({ x: event?.clientX || 0, y: event?.clientY || 0 });
+    }
+
     renderItem(item) {
         const binding = this.bindings[this.bindingKey(item.key)];
         const row = element("li", "siyuan-plugin-zotero-notes__item");
@@ -1363,48 +1402,16 @@ class ZoteroNotesPlugin extends Plugin {
         const meta = [authors, itemYear(item)].filter(Boolean).join(" · ");
         text.append(title, element("div", "siyuan-plugin-zotero-notes__meta", meta || item.key));
         const tools = element("div", "siyuan-plugin-zotero-notes__item-tools");
-        tools.append(
-            this.itemButton({
-                icon: "#zoteroNotesIconNote",
-                label: binding ? this.t("openNote") : this.t("newNote"),
-                title: binding ? this.t("openNote") : this.t("newNote"),
-                onClick: () => this.enqueue(() => this.createOrOpen(item))
-            }),
-            this.itemButton({
-                icon: "#zoteroNotesIconRefresh",
-                label: this.t("refreshMetadata"),
-                title: this.t("refreshMetadata"),
-                disabled: !binding,
-                onClick: () => this.enqueue(() => this.refreshMetadata(item))
-            }),
-            this.itemButton({
-                icon: "#zoteroNotesIconUpload",
-                label: this.t("syncNote"),
-                title: this.t("syncNote"),
-                disabled: !binding?.noteDocId,
-                onClick: () => this.enqueue(() => this.previewNoteSync(item))
-            }),
-            this.itemButton({
-                icon: "#zoteroNotesIconNote",
-                label: this.t("importAnnotations"),
-                title: this.t("importAnnotations"),
-                disabled: !binding?.noteDocId,
-                onClick: () => this.enqueue(() => this.importAnnotations(item))
-            }),
-            this.itemButton({
-                icon: "#zoteroNotesIconRefresh",
-                label: "翻译 / Translate",
-                title: "使用 pdf2zh 翻译 PDF",
-                disabled: !binding?.noteDocId,
-                onClick: () => this.openTranslationDialog(item)
-            }),
-            this.itemButton({
-                icon: "#zoteroNotesIconZotero",
-                label: this.t("openZotero"),
-                title: this.t("openZotero"),
-                onClick: () => window.open(`zotero://select/library/items/${item.key}`)
-            })
-        );
+        const model = this.dockActionModel(item, binding);
+        tools.append(this.itemButton(model.primary));
+        const more = this.itemButton({
+            icon: "#zoteroNotesIconZotero",
+            label: "更多",
+            title: "更多文献操作",
+            onClick: (event) => this.openItemOverflow(event, model)
+        });
+        more.classList.add("siyuan-plugin-zotero-notes__action--overflow");
+        tools.append(more);
         row.append(text, tools);
         return row;
     }
@@ -1612,6 +1619,7 @@ class ZoteroNotesPlugin extends Plugin {
                 content: `<div class="b3-dialog__content siyuan-plugin-zotero-notes__dialog-body"><p class="siyuan-plugin-zotero-notes__hint"></p><p class="siyuan-plugin-zotero-notes__path"></p><p class="siyuan-plugin-zotero-notes__error" role="alert"></p></div><div class="b3-dialog__action" data-recovery-actions></div>`,
                 width: "min(560px, calc(100vw - 24px))"
             });
+            this.prepareDialog(dialog);
             dialog.element.querySelector(".siyuan-plugin-zotero-notes__hint").textContent = inspection.recoveryMode === "note"
                 ? "原 Note 未找到。可以创建新 Note，或重新绑定同一路径下已有的 Note；不会修改 Zotero 子笔记。"
                 : "原论文页未找到。可以重建论文页和 Note；已删除的正文无法由插件恢复。";
@@ -2084,6 +2092,7 @@ class ZoteroNotesPlugin extends Plugin {
             width: "720px",
             height: "620px"
         });
+        this.prepareDialog(dialog);
         const render = dialog.element.querySelector(".siyuan-plugin-zotero-notes__render");
         render.innerHTML = sanitized.html;
         const warnings = dialog.element.querySelector(".siyuan-plugin-zotero-notes__warnings");
@@ -2480,6 +2489,7 @@ class ZoteroNotesPlugin extends Plugin {
             width: "680px",
             height: "600px"
         });
+        this.prepareDialog(dialog);
         const search = dialog.element.querySelector("[data-citation-search]");
         const list = dialog.element.querySelector(".siyuan-plugin-zotero-notes__citation-list");
         const form = dialog.element.querySelector("[data-citation-form]");
@@ -2662,6 +2672,7 @@ class ZoteroNotesPlugin extends Plugin {
             content: `<div class="b3-dialog__content"><select class="b3-select fn__block" data-export-format><option value="markdown">Markdown document</option><option value="docx">Word document</option><option value="latex">LaTeX document</option><option value="gbt">GB/T 7714 citations</option><option value="apa">APA citations</option><option value="ieee">IEEE citations</option><option value="bibtex">BibTeX</option><option value="biblatex">BibLaTeX</option><option value="typst">Typst</option></select></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-export-confirm>${this.t("exportContent")}</button></div>`,
             width: "480px"
         });
+        this.prepareDialog(dialog);
         const format = dialog.element.querySelector("[data-export-format]");
         dialog.element.querySelector("[data-export-confirm]").addEventListener("click", () => {
             this.enqueue(async () => {
@@ -2870,6 +2881,7 @@ class ZoteroNotesPlugin extends Plugin {
             content: `<div class="b3-dialog__content"><input type="file" class="b3-text-field fn__block" data-import-file accept=".json,.bib,.bibtex"><select class="b3-select fn__block" data-import-duplicate><option value="skip">重复条目：跳过</option><option value="create">重复条目：仍创建副本</option></select><div data-import-result></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-import-confirm>导入</button></div>`,
             width: "520px"
         });
+        this.prepareDialog(dialog);
         const fileInput = dialog.element.querySelector("[data-import-file]");
         const action = dialog.element.querySelector("[data-import-duplicate]");
         const result = dialog.element.querySelector("[data-import-result]");
@@ -3081,6 +3093,7 @@ class ZoteroNotesPlugin extends Plugin {
             content: `<div class="b3-dialog__content"><input class="b3-text-field fn__block" data-advanced-identifier placeholder="DOI、arXiv、ISBN、PMID/PMCID、URL"><input type="file" class="b3-text-field fn__block" data-advanced-pdf accept="application/pdf,.pdf"><select class="b3-select fn__block" data-advanced-duplicate><option value="skip">重复条目：跳过</option><option value="create">重复条目：仍创建副本</option></select><button class="b3-button b3-button--outline" data-advanced-fetch>检索 / 解析</button><input class="b3-text-field fn__block" data-advanced-title placeholder="识别标题（可编辑）"><div data-advanced-preview></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-advanced-import>确认导入</button></div>`,
             width: "600px"
         });
+        this.prepareDialog(dialog);
         const identifier = dialog.element.querySelector("[data-advanced-identifier]");
         const pdf = dialog.element.querySelector("[data-advanced-pdf]");
         const duplicate = dialog.element.querySelector("[data-advanced-duplicate]");
@@ -3388,6 +3401,7 @@ class ZoteroNotesPlugin extends Plugin {
             content: `<div class="b3-dialog__content"><select class="b3-select fn__block" data-translation-mode><option value="mono">单语译稿</option><option value="dual">双语对照译稿</option></select><p>使用 pdf2zh 创建独立译稿附件，不覆盖原始 PDF。</p></div><div class="b3-dialog__action"><button class="b3-button b3-button--cancel" data-translation-cancel>取消此文献翻译</button><button class="b3-button b3-button--text" data-translation-start>开始翻译</button></div>`,
             width: "480px"
         });
+        this.prepareDialog(dialog);
         const mode = dialog.element.querySelector("[data-translation-mode]");
         dialog.element.querySelector("[data-translation-start]").addEventListener("click", () => {
             this.enqueue(() => this.queueTranslations([item.key], mode.value));
