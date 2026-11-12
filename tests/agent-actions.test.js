@@ -8,7 +8,7 @@ function setupAgent(plugin) {
     plugin.eventBus = {
         handlers: {},
         on(name, handler) { this.handlers[name] = handler; },
-        off(name) { delete this.handlers[name]; }
+        off(name, handler) { if (this.handlers[name] === handler) delete this.handlers[name]; }
     };
     plugin.registerAgentActions();
 }
@@ -38,7 +38,10 @@ test("translate_paper returns per-job state without exposing secrets", async () 
     const plugin = makePlugin();
     setupAgent(plugin);
     plugin.library.items = [remoteItem("PAPER001")];
-    plugin.queueTranslations = async () => {};
+    plugin.initTranslationState();
+    plugin.queueTranslations = async () => {
+        plugin.translationJobs.set("PAPER001", { status: "completed", mode: "dual", error: "" });
+    };
     plugin.waitForTranslationIdle = async () => {};
     const result = await plugin.agentActions.translate_paper.handler({ itemKey: "PAPER001", mode: "dual" });
     assert.match(result.result, /翻译/);

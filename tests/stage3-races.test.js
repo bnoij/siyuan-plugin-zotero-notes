@@ -146,3 +146,27 @@ test("uploadZoteroFile forwards cancellation through all upload phases", async (
     assert.equal(signals.length, 3);
     assert.ok(signals.every((signal) => signal === controller.signal));
 });
+
+
+test("uploadZoteroFile uses the negotiated content type and prefix/suffix framing", async () => {
+    const plugin = makePlugin();
+    const calls = [];
+    plugin.withWriteKey = async (operation) => operation("key");
+    plugin.zoteroRequest = async (path, options = {}) => {
+        calls.push({ path, options });
+        if (calls.length === 1) return { data: {
+            uploadKey: "u1",
+            url: "http://127.0.0.1:23119/api/local/uploads/u1",
+            contentType: "application/x-www-form-urlencoded",
+            prefix: "prefix\n",
+            suffix: "\nsuffix"
+        } };
+        return { data: null };
+    };
+    await plugin.uploadZoteroFile("ATTACH1", new TextEncoder().encode("PDF"), "translated.pdf");
+    const upload = calls[1];
+    assert.equal(calls[0].options.headers["Content-Type"], "application/x-www-form-urlencoded");
+    assert.equal(upload.options.headers["Content-Type"], "application/x-www-form-urlencoded");
+    assert.equal(new TextDecoder().decode(upload.options.rawBody), "prefix\nPDF\nsuffix");
+    assert.equal(calls[2].options.headers["Content-Type"], "application/x-www-form-urlencoded");
+});

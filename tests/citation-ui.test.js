@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { makePlugin } = require("./helpers/load-plugin.js");
+const { makePlugin, remoteItem } = require("./helpers/load-plugin.js");
 
 test("saveCitationRegistry merges the latest document registry across windows", async () => {
     const plugin = makePlugin();
@@ -59,4 +59,13 @@ test("refreshBibliography ignores documents without citations", async () => {
     plugin.request = async () => ({});
     plugin.formatBibliography = async () => { throw new Error("Must not format an empty registry"); };
     await plugin.refreshBibliography("doc1");
+});
+
+
+test("citationMarkdown and citationText preserve stored global numbers", () => {
+    const plugin = makePlugin();
+    const registry = [{ key: "A", form: "numeric", number: 1 }, { key: "C", form: "numeric", number: 3 }];
+    const markdown = plugin.citationMarkdown([remoteItem("C")], "numeric", registry);
+    assert.match(markdown, /^\[3\]\(/);
+    assert.equal(plugin.citationText(remoteItem("C"), "numeric", registry[1].number), "[3]");
 });

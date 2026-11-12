@@ -6,7 +6,7 @@ const { makePlugin, remoteItem } = require("./helpers/load-plugin.js");
 function setupAgent(plugin) {
     plugin.agentActions = {};
     plugin.addAgentAction = (action) => { plugin.agentActions[action.name] = action; };
-    plugin.eventBus = { on() {}, off() {} };
+    plugin.eventBus = { handlers: {}, on(name, handler) { this.handlers[name] = handler; }, off(name, handler) { if (this.handlers[name] === handler) delete this.handlers[name]; } };
     plugin.registerAgentActions();
 }
 
@@ -59,6 +59,7 @@ test("translate_paper returns the job error instead of reporting success", async
     const plugin = makePlugin();
     setupAgent(plugin);
     plugin.initTranslationState();
+    plugin.library.items = [remoteItem("PAPER001")];
     plugin.queueTranslations = async () => {
         plugin.translationJobs.set("PAPER001", { status: "error", mode: "mono", error: "pdf2zh crashed" });
     };
@@ -177,4 +178,20 @@ test("normalizeSettings stores only valid unique translation secret names", () =
     const plugin = makePlugin();
     const settings = plugin.normalizeSettings({ translationSecretNames: "OPENAI_API_KEY, INVALID-NAME, OPENAI_API_KEY, OTHER_TOKEN" });
     assert.deepEqual(settings.translationSecretNames, ["OPENAI_API_KEY", "OTHER_TOKEN"]);
+});
+
+
+test("translate_paper rejects an item that is absent from the library", async () => {
+    const plugin = makePlugin();
+    setupAgent(plugin);
+    plugin.library.items = [];
+    const result = await plugin.agentActions.translate_paper.handler({ itemKey: "MISSING", mode: "mono" });
+    assert.match(result.error, /MISSING|不存在|not found/i);
+});
+
+test("eventBus handlers ignore malformed events without throwing", async () => {
+    const plugin = makePlugin();
+    setupAgent(plugin);
+    assert.doesNotThrow(() => plugin.eventBus.handlers.GetFromPool({ detail: {} }));
+    await assert.doesNotReject(() => plugin.eventBus.handlers.Refresh({}));
 });

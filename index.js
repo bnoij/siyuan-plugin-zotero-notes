@@ -446,29 +446,36 @@ class ZoteroNotesPlugin extends Plugin {
             description: "Translate a paper PDF using an existing pdf2zh executable. Args: {itemKey,mode:'mono'|'dual'}",
             handler: async (args) => {
                 if (typeof args?.itemKey !== "string" || !["mono", "dual"].includes(args.mode)) return { error: "itemKey and mode are required" };
+                if (!this.library.items.some((item) => item.key === args.itemKey)) return { error: `文献 ${args.itemKey} 不存在于当前文库` };
                 try {
                     this.initTranslationState();
                     await this.queueTranslations([args.itemKey], args.mode);
                     await this.waitForTranslationIdle();
                     const job = this.translationJobs.get(args.itemKey);
-                    if (job?.status === "error") return { error: job.error || "pdf2zh 翻译失败" };
-                    if (job?.status === "cancelled") return { error: `翻译 ${args.itemKey} 已取消` };
-                    return { result: `翻译 ${args.itemKey}: ${job?.status || "unknown"}` };
+                    if (!job) return { error: `未能创建文献 ${args.itemKey} 的翻译任务` };
+                    if (job.status === "error") return { error: job.error || "pdf2zh 翻译失败" };
+                    if (job.status === "cancelled") return { error: `翻译 ${args.itemKey} 已取消` };
+                    if (job.status !== "completed") return { error: `翻译 ${args.itemKey} 未完成：${job.status}` };
+                    return { result: `翻译 ${args.itemKey}: ${job.status}` };
                 } catch (error) {
                     return { error: errorMessage(error) };
                 }
             }
         });
-        this.eventBus.on("GetFromPool", (event) => {
+        const getFromPool = (event) => {
+            if (typeof event?.detail?.triggerFn !== "function") return;
             const items = this.library.items.slice(0, 200).map((item) => ({ key: item.key, title: itemTitle(item), authors: itemAuthors(item), year: itemYear(item) }));
             event.detail.triggerFn("total", this.library.items.length);
             event.detail.triggerFn("all", items);
-        });
-        this.eventBus.on("Refresh", async (event) => {
-            if (event.detail.type === "database") return this.refreshLibrary(false);
+        };
+        const refresh = async (event) => {
+            if (event?.detail?.type === "database") return this.refreshLibrary(false);
             const item = this.library.items[0];
             if (item) return this.refreshMetadata(item);
-        });
+        };
+        this.agentEventHandlers = { GetFromPool: getFromPool, Refresh: refresh };
+        this.eventBus.on("GetFromPool", getFromPool);
+        this.eventBus.on("Refresh", refresh);
     }
 
     async onLayoutReady() {
@@ -525,8 +532,8 @@ class ZoteroNotesPlugin extends Plugin {
         this.stopAutoSync();
         this.stopWorkflowQueue();
         this.cancelTranslations();
-        this.eventBus?.off?.("GetFromPool");
-        this.eventBus?.off?.("Refresh");
+        this.eventBus?.off?.("GetFromPool", this.agentEventHandlers?.GetFromPool);
+        this.eventBus?.off?.("Refresh", this.agentEventHandlers?.Refresh);
         this.dockElement = null;
     }
 
@@ -1877,6 +1884,22 @@ class ZoteroNotesPlugin extends Plugin {
         return `[${text}](zotero://select/library/items/${unique[0]}${query})`;
     }
 
+    renumberCitationMarkdown(markdown, entries) {
+        return String(markdown || "").replace(/\[([^\]\n]*)\]\((zotero:\/\/select\/library\/items\/[^)\s]+)\)/g, (match, label, url) => {
+            let keys;
+            try {
+                const parsed = new URL(url);
+                keys = (parsed.searchParams.get("zkeys") || "").split(",").filter(Boolean);
+            } catch {
+                return match;
+            }
+            if (!keys.length) return match;
+            const citations = keys.map((key) => entries.find((entry) => entry.key === key));
+            if (citations.some((entry) => !entry || entry.form !== "numeric")) return match;
+            return `[${citations.map((entry) => entry.number).join(",")}](${url})`;
+        });
+    }
+
     mergeCitationEntries(existing, incoming) {
         const result = (existing || []).map((entry) => ({ ...entry }));
         (incoming || []).forEach((entry) => {
@@ -2010,16 +2033,29 @@ class ZoteroNotesPlugin extends Plugin {
             });
             const documents = [{ id: rootDocId, hpath: rootHPath }, ...(descendants || []).filter((document) => document.hpath !== referencePath)];
             const allEntries = [];
+            const citationNumbers = new Map();
             let style = this.settings.citationStyle;
             for (const document of documents) {
                 const attrs = await this.request("/api/attr/getBlockAttrs", { id: document.id });
-                const entries = this.citationRegistryFromAttrs(attrs).map((entry, index) => ({ ...entry, number: allEntries.length + index + 1 }));
+                const entries = this.citationRegistryFromAttrs(attrs).map((entry) => {
+                    if (!citationNumbers.has(entry.key)) citationNumbers.set(entry.key, citationNumbers.size + 1);
+                    return { ...entry, number: citationNumbers.get(entry.key) };
+                });
                 allEntries.push(...entries);
                 style = attrs[ATTR_STYLE] || style;
                 await this.request("/api/attr/setBlockAttrs", {
                     id: document.id,
                     attrs: { [ATTR_CITES]: JSON.stringify(entries), [ATTR_STYLE]: style }
                 });
+                const citationRows = await this.request("/api/query/sql", {
+                    stmt: `SELECT id, markdown FROM blocks WHERE root_id = '${document.id}' AND markdown LIKE '%zotero://select/library/items/%'`
+                });
+                for (const row of Array.isArray(citationRows) ? citationRows : []) {
+                    const markdown = this.renumberCitationMarkdown(row.markdown, entries);
+                    if (markdown !== row.markdown) {
+                        await this.request("/api/block/updateBlock", { dataType: "markdown", data: markdown, id: row.id });
+                    }
+                }
                 const oldBibs = await this.request("/api/query/sql", {
                     stmt: `SELECT a.block_id FROM attributes a JOIN blocks b ON a.block_id = b.id WHERE a.name = '${ATTR_BIB}' AND b.root_id = '${document.id}'`
                 });
@@ -2080,10 +2116,11 @@ class ZoteroNotesPlugin extends Plugin {
     citationMarkdown(items, form = this.settings.citationForm, registry = []) {
         const keys = items.map((item) => item.key);
         if (form === "numeric") {
-            const text = `[${items.map((item, index) => {
-                const found = registry.findIndex((entry) => entry.key === item.key);
-                return found >= 0 ? found + 1 : registry.length + index + 1;
-            }).join(",")}]`;
+            const text = items.map((item, index) => {
+                const foundIndex = registry.findIndex((entry) => entry.key === item.key);
+                const found = registry[foundIndex];
+                return found?.number || (foundIndex >= 0 ? foundIndex + 1 : registry.length + index + 1);
+            }).join(",");
             return this.citationLink(keys, text);
         }
         const text = items.map((item) => this.citationText(item, form, registry.findIndex((entry) => entry.key === item.key) + 1)).join("; ");
@@ -2848,22 +2885,29 @@ class ZoteroNotesPlugin extends Plugin {
             const initialized = await this.zoteroRequest(`${USER_PREFIX}/items/${itemKey}/file?md5=${md5}&filename=${encodeURIComponent(filename)}&filesize=${bytes.byteLength}&mtime=${Date.now()}`, {
                 method: "POST",
                 apiKey,
-                headers: { "If-None-Match": "*" },
+                headers: { "If-None-Match": "*", "Content-Type": "application/x-www-form-urlencoded" },
                 signal: options.signal
             });
             if (initialized.data?.exists) return { key: itemKey, exists: true };
             const uploadURL = initialized.data?.url;
             if (!uploadURL) throw new Error("Zotero 未返回附件上传地址");
+            const encoder = new TextEncoder();
+            const prefix = encoder.encode(initialized.data.prefix || "");
+            const suffix = encoder.encode(initialized.data.suffix || "");
+            const uploadBody = new Uint8Array(prefix.byteLength + bytes.byteLength + suffix.byteLength);
+            uploadBody.set(prefix);
+            uploadBody.set(bytes, prefix.byteLength);
+            uploadBody.set(suffix, prefix.byteLength + bytes.byteLength);
             await this.zoteroRequest(uploadURL, {
                 method: "POST",
-                rawBody: bytes,
-                headers: { "Content-Type": "application/octet-stream" },
+                rawBody: uploadBody,
+                headers: { "Content-Type": initialized.data.contentType || "application/x-www-form-urlencoded" },
                 signal: options.signal
             });
             await this.zoteroRequest(`${USER_PREFIX}/items/${itemKey}/file?upload=${encodeURIComponent(initialized.data.uploadKey)}`, {
                 method: "POST",
                 apiKey,
-                headers: { "If-None-Match": "*" },
+                headers: { "If-None-Match": "*", "Content-Type": "application/x-www-form-urlencoded" },
                 signal: options.signal
             });
             return { key: itemKey, exists: false };
