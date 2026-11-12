@@ -65,7 +65,10 @@ test("uploadZoteroFile follows authorize, upload, and commit phases", async () =
     };
     await plugin.uploadZoteroFile("ATTACH1", new TextEncoder().encode("pdf"), "translated.pdf");
     assert.equal(calls.length, 3);
-    assert.match(calls[0].path, /md5=/);
+    assert.equal(calls[0].path, "/users/0/items/ATTACH1/file");
+    assert.match(calls[0].options.rawBody, /md5=/);
+    assert.match(calls[0].options.rawBody, /filename=translated.pdf/);
     assert.equal(calls[1].path, "/upload/upload1");
-    assert.match(calls[2].path, /upload=upload1/);
+    assert.equal(calls[2].path, "/users/0/items/ATTACH1/file");
+    assert.equal(calls[2].options.rawBody, "upload=upload1");
 });

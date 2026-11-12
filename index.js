@@ -2882,9 +2882,16 @@ class ZoteroNotesPlugin extends Plugin {
         const digest = this.nodeRequire("crypto").createHash("md5").update(bytes).digest();
         const md5 = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
         return this.withWriteKey(async (apiKey) => {
-            const initialized = await this.zoteroRequest(`${USER_PREFIX}/items/${itemKey}/file?md5=${md5}&filename=${encodeURIComponent(filename)}&filesize=${bytes.byteLength}&mtime=${Date.now()}`, {
+            const authorization = new URLSearchParams({
+                md5,
+                filename,
+                filesize: String(bytes.byteLength),
+                mtime: String(Date.now())
+            }).toString();
+            const initialized = await this.zoteroRequest(`${USER_PREFIX}/items/${itemKey}/file`, {
                 method: "POST",
                 apiKey,
+                rawBody: authorization,
                 headers: { "If-None-Match": "*", "Content-Type": "application/x-www-form-urlencoded" },
                 signal: options.signal
             });
@@ -2904,9 +2911,11 @@ class ZoteroNotesPlugin extends Plugin {
                 headers: { "Content-Type": initialized.data.contentType || "application/x-www-form-urlencoded" },
                 signal: options.signal
             });
-            await this.zoteroRequest(`${USER_PREFIX}/items/${itemKey}/file?upload=${encodeURIComponent(initialized.data.uploadKey)}`, {
+            const registration = new URLSearchParams({ upload: initialized.data.uploadKey }).toString();
+            await this.zoteroRequest(`${USER_PREFIX}/items/${itemKey}/file`, {
                 method: "POST",
                 apiKey,
+                rawBody: registration,
                 headers: { "If-None-Match": "*", "Content-Type": "application/x-www-form-urlencoded" },
                 signal: options.signal
             });

@@ -166,7 +166,9 @@ test("uploadZoteroFile uses the negotiated content type and prefix/suffix framin
     await plugin.uploadZoteroFile("ATTACH1", new TextEncoder().encode("PDF"), "translated.pdf");
     const upload = calls[1];
     assert.equal(calls[0].options.headers["Content-Type"], "application/x-www-form-urlencoded");
+    assert.match(calls[0].options.rawBody, /md5=/);
     assert.equal(upload.options.headers["Content-Type"], "application/x-www-form-urlencoded");
     assert.equal(new TextDecoder().decode(upload.options.rawBody), "prefix\nPDF\nsuffix");
     assert.equal(calls[2].options.headers["Content-Type"], "application/x-www-form-urlencoded");
+    assert.equal(calls[2].options.rawBody, "upload=u1");
 });
