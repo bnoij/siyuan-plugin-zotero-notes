@@ -1,4 +1,4 @@
-const { Plugin, Dialog, Setting, showMessage, openTab, getActiveEditor } = require("siyuan");
+const { Plugin, Dialog, Menu, Setting, showMessage, openTab, getActiveEditor } = require("siyuan");
 
 const PLUGIN_NAME = "siyuan-plugin-zotero-notes";
 const ZOTERO_API = "http://127.0.0.1:23119/api";
@@ -372,30 +372,159 @@ class ZoteroNotesPlugin extends Plugin {
             icon: "iconBookmark",
             title: this.t("pluginName"),
             position: "right",
-            contextMenu: (menu) => {
-                menu.addItem({ icon: "iconRefresh", label: this.t("refresh"), click: () => this.refreshLibrary(true) });
-                menu.addItem({ icon: "iconLink", label: this.t("insertCitation"), click: () => this.openCitationSelector() });
-                menu.addItem({ icon: "iconDownload", label: this.t("exportContent"), click: () => this.openExportDialog() });
-                menu.addItem({ icon: "iconDatabase", label: "文献数据库 / Paper database", click: () => this.enqueue(() => this.openPaperDatabase()) });
-                menu.addItem({ icon: "iconList", label: "统一多页引用 / Connected citations", click: () => this.enqueue(() => this.syncCurrentCitationTree()) });
-                menu.addItem({ icon: "iconUpload", label: "导入文献 / Import papers", click: () => this.openImportDialog() });
-                menu.addItem({ icon: "iconSearch", label: "检索 / PDF 导入", click: () => this.openAdvancedImportDialog() });
-                menu.addItem({ icon: "iconSettings", label: this.t("settings"), click: () => this.openSetting() });
-            },
-            callback: () => this.openSetting()
+            contextMenu: (menu) => this.populateMainMenu(menu),
+            callback: (event) => this.openMainMenu(event)
         });
-        this.addCommand({
-            langKey: "insertCitation",
-            hotkey: "",
-            callback: () => this.openCitationSelector()
-        });
-        this.addCommand({
-            langKey: "exportContent",
-            hotkey: "",
-            callback: () => this.openExportDialog()
-        });
+        this.registerInteractionCommands();
         this.registerAgentActions();
         this.startAutoSync();
+    }
+
+    registerInteractionCommands() {
+        this.recoveryRequired = this.recoveryRequired || new Set();
+        const slash = (id, filter, label, callback) => ({
+            id,
+            filter,
+            html: `<div class="b3-list-item__first"><span class="b3-list-item__text">${label}</span><span class="b3-list-item__meta">Zotero</span></div>`,
+            callback
+        });
+        this.protyleSlash = [
+            slash("zotero-notes-citation", ["/zotero", "/citation", "/引用"], "插入 Zotero 引用", (protyle) => {
+                if (protyle?.block?.rootID) this.currentProtyle = protyle;
+                this.openCitationSelector();
+            }),
+            slash("zotero-notes-note", ["/znote", "/note", "/笔记"], "创建或打开 Zotero Note", (protyle) => {
+                if (protyle?.block?.rootID) this.currentProtyle = protyle;
+                this.openNotePicker();
+            }),
+            slash("zotero-notes-export", ["/zexport", "/export", "/导出"], "导出 Zotero 内容", (protyle) => {
+                if (protyle?.block?.rootID) this.currentProtyle = protyle;
+                this.openExportDialog();
+            })
+        ];
+        const command = (operation) => () => Promise.resolve().then(operation).catch((error) => showMessage(errorMessage(error), 8000));
+        const commands = [
+            ["insertCitation", () => this.openCitationSelector()],
+            ["exportContent", () => this.openExportDialog()],
+            ["openNotePicker", () => this.openNotePicker()],
+            ["openZoteroDock", () => this.focusDock()],
+            ["syncConnectedCitations", () => this.syncCurrentCitationTree()],
+            ["importPapers", () => this.openImportDialog()],
+            ["advancedImport", () => this.openAdvancedImportDialog()],
+            ["checkZoteroConnection", () => this.checkZoteroConnection()],
+            ["openZoteroSettings", () => this.openSetting()]
+        ];
+        for (const [langKey, operation] of commands) this.addCommand({ langKey, hotkey: "", callback: command(operation) });
+        this.registerDocumentMenus();
+    }
+
+    notePickerItems(query = "") {
+        const normalized = cleanText(query).toLocaleLowerCase();
+        if (!normalized) return this.library.items.slice(0, 100);
+        return this.library.items.filter((item) => {
+            const data = item.data || {};
+            const tags = (data.tags || []).map((tag) => tag.tag || tag).join(" ");
+            return `${itemTitle(item)} ${itemAuthors(item)} ${itemYear(item)} ${tags} ${item.key}`.toLocaleLowerCase().includes(normalized);
+        }).slice(0, 100);
+    }
+
+    openNotePicker() {
+        const dialog = new Dialog({
+            title: "创建或打开 Zotero Note",
+            content: `<div class="b3-dialog__content siyuan-plugin-zotero-notes__dialog-body"><input class="b3-text-field fn__block" data-note-search placeholder="搜索标题、作者、年份或标签"/><div class="siyuan-plugin-zotero-notes__picker" data-note-results></div></div>`,
+            width: "min(680px, calc(100vw - 24px))",
+            height: "min(560px, calc(100dvh - 64px))"
+        });
+        const input = dialog.element.querySelector("[data-note-search]");
+        const results = dialog.element.querySelector("[data-note-results]");
+        const render = () => {
+            results.replaceChildren();
+            for (const item of this.notePickerItems(input.value)) {
+                const button = element("button", "siyuan-plugin-zotero-notes__picker-item");
+                button.type = "button";
+                const title = element("strong", "siyuan-plugin-zotero-notes__picker-title", itemTitle(item));
+                const meta = element("span", "siyuan-plugin-zotero-notes__meta", `${itemAuthors(item)} · ${itemYear(item)}`);
+                button.append(title, meta);
+                button.addEventListener("click", () => {
+                    dialog.destroy();
+                    this.enqueue(() => this.createOrOpen(item));
+                });
+                results.append(button);
+            }
+        };
+        input.addEventListener("input", render);
+        render();
+        input.focus();
+    }
+
+    focusDock() {
+        this.render();
+        this.dockElement?.focus?.();
+    }
+
+    async checkZoteroConnection() {
+        const result = await this.zoteroPage(`${USER_PREFIX}/items?limit=1`);
+        if (!result.serverID) throw new Error("Zotero 10+ required");
+        showMessage(this.t("connectionSuccess"));
+    }
+
+    populateMainMenu(menu) {
+        menu.addItem({ icon: "iconBookmark", label: "打开 Zotero 文库", click: () => this.focusDock() });
+        menu.addItem({ icon: "iconNote", label: "创建或打开 Note", click: () => this.openNotePicker() });
+        menu.addItem({ icon: "iconRefresh", label: this.t("refresh"), click: () => this.refreshLibrary(true) });
+        menu.addItem({ icon: "iconLink", label: this.t("insertCitation"), click: () => this.openCitationSelector() });
+        menu.addItem({ icon: "iconDownload", label: this.t("exportContent"), click: () => this.openExportDialog() });
+        menu.addItem({ icon: "iconList", label: "统一多页引用 / Connected citations", click: () => this.enqueue(() => this.syncCurrentCitationTree()) });
+        menu.addItem({ icon: "iconDatabase", label: "文献数据库 / Paper database", click: () => this.enqueue(() => this.openPaperDatabase()) });
+        menu.addItem({ icon: "iconUpload", label: "导入文献 / Import papers", click: () => this.openImportDialog() });
+        menu.addItem({ icon: "iconSearch", label: "检索 / PDF 导入", click: () => this.openAdvancedImportDialog() });
+        menu.addItem({ icon: "iconSettings", label: this.t("settings"), click: () => this.openSetting() });
+    }
+
+    openMainMenu(event) {
+        const menu = new Menu("zotero-notes-main-menu");
+        this.populateMainMenu(menu);
+        menu.open({ x: event?.clientX || 0, y: event?.clientY || 0 });
+    }
+
+    registerDocumentMenus() {
+        const content = (event) => this.addDocumentMenuItems(event?.detail?.protyle?.block?.rootID, event?.detail?.menu);
+        const doctree = (event) => {
+            if (event?.detail?.type !== "doc" || event.detail.items?.length !== 1) return;
+            return this.addDocumentMenuItems(event.detail.items[0]?.id, event.detail.menu);
+        };
+        this.documentMenuHandlers = {
+            "open-menu-content": content,
+            "click-editortitleicon": content,
+            "open-menu-doctree": doctree
+        };
+        for (const [name, handler] of Object.entries(this.documentMenuHandlers)) this.eventBus.on(name, handler);
+    }
+
+    async addDocumentMenuItems(docId, menu) {
+        if (!docId || !menu) return;
+        try {
+            const bindingEntry = Object.entries(this.bindings).find(([, binding]) => binding.parentDocId === docId || binding.noteDocId === docId);
+            if (!bindingEntry) {
+                menu.addItem({ icon: "iconLink", label: "插入 Zotero 引用", click: () => this.openCitationSelector() });
+                menu.addItem({ icon: "iconDownload", label: "导出文档", click: () => this.openExportDialog() });
+                menu.addItem({ icon: "iconList", label: "统一多页引用", click: () => this.enqueue(() => this.syncConnectedCollection(docId)) });
+                return;
+            }
+            const [bindingKey, binding] = bindingEntry;
+            const item = this.library.items.find((candidate) => candidate.key === binding.itemKey);
+            if (!item) return;
+            const needsRecovery = this.recoveryRequired.has(item.key);
+            menu.addItem({ icon: "iconNote", label: needsRecovery ? "恢复 Note" : "打开 Note", click: () => this.enqueue(() => this.createOrOpen(item)) });
+            menu.addItem({ icon: "iconRefresh", label: this.t("refreshMetadata"), click: () => this.enqueue(() => this.refreshMetadata(item)) });
+            menu.addItem({ icon: "iconUpload", label: this.t("syncNote"), click: () => this.enqueue(() => this.previewNoteSync(item)) });
+            menu.addItem({ icon: "iconNote", label: this.t("importAnnotations"), click: () => this.enqueue(() => this.importAnnotations(item)) });
+            menu.addItem({ icon: "iconLanguage", label: "翻译 PDF", click: () => this.openTranslationDialog(item) });
+            menu.addItem({ icon: "iconZotero", label: this.t("openZotero"), click: () => window.open(`zotero://select/library/items/${item.key}`) });
+            this.lastDocumentMenuBinding = bindingKey;
+        } catch (error) {
+            console.warn("Zotero document menu failed", errorMessage(error));
+        }
     }
 
     registerAgentActions() {
@@ -534,6 +663,7 @@ class ZoteroNotesPlugin extends Plugin {
         this.cancelTranslations();
         this.eventBus?.off?.("GetFromPool", this.agentEventHandlers?.GetFromPool);
         this.eventBus?.off?.("Refresh", this.agentEventHandlers?.Refresh);
+        for (const [name, handler] of Object.entries(this.documentMenuHandlers || {})) this.eventBus?.off?.(name, handler);
         this.dockElement = null;
     }
 
@@ -1496,6 +1626,7 @@ class ZoteroNotesPlugin extends Plugin {
                     button.disabled = true;
                     try {
                         const result = await this.recoverBindingDocument(item, binding, action, inspection);
+                        this.recoveryRequired?.delete(item.key);
                         dialog.destroy();
                         await openTab({ app: this.app, doc: { id: result.noteDocId } });
                         resolve({ status: "recovered", ...result });
@@ -1539,6 +1670,7 @@ class ZoteroNotesPlugin extends Plugin {
                 if (shouldOpenTab) await openTab({ app: this.app, doc: { id: existing.parentDocId } });
                 return { parentDocId: existing.parentDocId, noteDocId: existing.noteDocId, path: existing.path || inspection.parentPath };
             }
+            this.recoveryRequired?.add(item.key);
             if (shouldOpenTab) return this.openBindingRecovery(item, existing, inspection);
             return { status: "recovery-required", inspection };
         }
