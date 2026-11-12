@@ -1482,13 +1482,11 @@ class ZoteroNotesPlugin extends Plugin {
     async inspectBindingDocuments(binding, item) {
         const inspect = async (id) => {
             if (!id) return { exists: false, attrs: {} };
-            try {
-                const attrs = await this.request("/api/attr/getBlockAttrs", { id });
-                return { exists: true, attrs: attrs || {} };
-            } catch (error) {
-                if (/not found|未找到|不存在|tree not found/i.test(errorMessage(error))) return { exists: false, attrs: {} };
-                throw error;
-            }
+            const rows = await this.request("/api/query/sql", { stmt: `SELECT id FROM blocks WHERE id = '${String(id).replace(/'/g, "''")}'` });
+            const exists = Array.isArray(rows) && rows.some((row) => row.id === id);
+            if (!exists) return { exists: false, attrs: {} };
+            const attrs = await this.request("/api/attr/getBlockAttrs", { id });
+            return { exists: true, attrs: attrs || {} };
         };
         const parent = await inspect(binding.parentDocId);
         const note = await inspect(binding.noteDocId);

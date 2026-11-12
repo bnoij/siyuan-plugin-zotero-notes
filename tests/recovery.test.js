@@ -18,6 +18,13 @@ function setupPlugin({ parentExists = true, noteExists = true, parentAttrs = {},
     const calls = [];
     plugin.request = async (url, data = {}) => {
         calls.push({ url, data });
+        if (url === "/api/query/sql") {
+            const rows = [];
+            if (parentExists && data.stmt.includes(PARENT)) rows.push({ id: PARENT });
+            if (noteExists && data.stmt.includes(NOTE)) rows.push({ id: NOTE });
+            if (data.stmt.includes("candidate-parent")) rows.push({ id: "candidate-parent" });
+            return rows;
+        }
         if (url === "/api/attr/getBlockAttrs") {
             if (data.id === PARENT && parentExists) return { title: "Paper", ...parentAttrs };
             if (data.id === NOTE && noteExists) return { title: "Note", ...noteAttrs };
@@ -153,4 +160,21 @@ test("missing bound paper with a same-title candidate uses paper recovery mode",
     assert.equal(inspection.recoveryMode, "paper");
     assert.equal(inspection.parentExists, true);
     assert.equal(inspection.boundParentExists, false);
+});
+
+
+test("stale block attributes do not prove a deleted document exists", async () => {
+    const { plugin, item, binding } = setupPlugin();
+    plugin.request = async (url, data = {}) => {
+        if (url === "/api/query/sql") return [];
+        if (url === "/api/attr/getBlockAttrs") return { title: "Stale", "custom-zotero-item-key": ITEM };
+        if (url === "/api/filetree/getHPathByID") return "/Zotero/Paper";
+        if (url === "/api/filetree/getIDsByHPath") return [];
+        throw new Error(`Unexpected request ${url}`);
+    };
+    const inspection = await plugin.inspectBindingDocuments(binding, item);
+    assert.equal(inspection.parentExists, false);
+    assert.equal(inspection.boundParentExists, false);
+    assert.equal(inspection.noteExists, false);
+    assert.equal(inspection.boundNoteExists, false);
 });

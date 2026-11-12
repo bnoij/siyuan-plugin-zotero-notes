@@ -31,6 +31,7 @@ test("createOrOpen reloads bindings before creating a document", async () => {
     plugin.loadData = async () => ({ [`server:${item.key}`]: existing });
     plugin.request = async (url) => {
         if (url.includes("createDocWithMd")) throw new Error("Must not create a duplicate document");
+        if (url === "/api/query/sql") return [{ id: "existing-parent" }, { id: "existing-note" }];
         return [];
     };
     await plugin.createOrOpen(item);
@@ -63,6 +64,7 @@ test("createOrOpen uses an origin-wide lock when Web Locks are available", async
         }
     });
     plugin.request = async (url) => {
+        if (url === "/api/query/sql") return [{ id: "existing-parent" }, { id: "existing-note" }];
         if (url === "/api/attr/getBlockAttrs") return {};
         if (url === "/api/filetree/getHPathByID") return "/Zotero/Paper";
         return null;
