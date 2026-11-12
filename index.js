@@ -1345,13 +1345,202 @@ class ZoteroNotesPlugin extends Plugin {
         return this.withOperationLock(item.key, () => this.createOrOpenExclusive(item, options));
     }
 
+    async inspectBindingDocuments(binding, item) {
+        const inspect = async (id) => {
+            if (!id) return { exists: false, attrs: {} };
+            try {
+                const attrs = await this.request("/api/attr/getBlockAttrs", { id });
+                return { exists: true, attrs: attrs || {} };
+            } catch (error) {
+                if (/not found|未找到|不存在|tree not found/i.test(errorMessage(error))) return { exists: false, attrs: {} };
+                throw error;
+            }
+        };
+        const parent = await inspect(binding.parentDocId);
+        const note = await inspect(binding.noteDocId);
+        let parentPath = parent.exists ? await this.request("/api/filetree/getHPathByID", { id: binding.parentDocId }) : binding.path;
+        if (!parentPath) {
+            const root = await this.ensureRoot();
+            parentPath = `${root.path}/${safeDocumentTitle(itemTitle(item), item.key)}`;
+        }
+        let candidateParentId = parent.exists ? binding.parentDocId : "";
+        let parentAttrs = parent.attrs;
+        if (!parent.exists) {
+            const ids = await this.request("/api/filetree/getIDsByHPath", { notebook: this.settings.notebook, path: parentPath });
+            candidateParentId = ids?.[0] || "";
+            if (candidateParentId) parentAttrs = (await inspect(candidateParentId)).attrs;
+        }
+        const notePath = `${parentPath}/Note`;
+        let candidateNoteId = note.exists ? binding.noteDocId : "";
+        let noteAttrs = note.attrs;
+        if (!note.exists && parent.exists) {
+            const ids = await this.request("/api/filetree/getIDsByHPath", { notebook: this.settings.notebook, path: notePath });
+            candidateNoteId = ids?.[0] || "";
+            if (candidateNoteId) noteAttrs = (await inspect(candidateNoteId)).attrs;
+        }
+        return {
+            parentExists: parent.exists || !!candidateParentId,
+            noteExists: note.exists || !!candidateNoteId,
+            recoveryMode: parent.exists ? "note" : "paper",
+            boundParentExists: parent.exists,
+            boundNoteExists: note.exists,
+            parentDocId: candidateParentId,
+            noteDocId: candidateNoteId,
+            originalParentDocId: binding.parentDocId,
+            originalNoteDocId: binding.noteDocId,
+            parentAttrs,
+            noteAttrs,
+            parentPath,
+            notePath
+        };
+    }
+
+    assertRecoveryClaim(item, docId, attrs, kind) {
+        if (!docId) throw new Error(`没有找到可认领的${kind === "note" ? " Note" : "论文页"}`);
+        const foreign = Object.values(this.bindings).some((binding) => binding.itemKey !== item.key && (kind === "note" ? binding.noteDocId : binding.parentDocId) === docId);
+        if (foreign || (attrs?.[ATTR_ITEM] && attrs[ATTR_ITEM] !== item.key)) {
+            throw new Error(`该${kind === "note" ? " Note" : "文档"}已绑定其他文献，不能认领 / Already bound to another item`);
+        }
+    }
+
+    async recoverBindingDocument(item, binding, action, inspection) {
+        return this.withOperationLock(item.key, async () => {
+            if (binding.noteDocId !== inspection.originalNoteDocId && ["rebuild-note", "rebind-note"].includes(action)) return binding;
+            if (binding.parentDocId !== inspection.originalParentDocId && ["rebuild-paper", "rebind-paper"].includes(action)) return binding;
+            const next = { ...binding };
+            if (action === "rebuild-note") {
+                if (inspection.noteExists) throw new Error("已有 Note 可重新绑定，请选择重新绑定而不是新建");
+                if (!inspection.boundParentExists) throw new Error("论文页不存在，请先恢复论文页");
+                next.parentDocId = inspection.parentDocId;
+                next.noteDocId = await this.request("/api/filetree/createDocWithMd", {
+                    notebook: this.settings.notebook,
+                    path: inspection.notePath,
+                    markdown: ""
+                });
+                await this.request("/api/block/updateBlock", {
+                    dataType: "markdown",
+                    data: this.initialNoteMarkdown(item, next.noteDocId),
+                    id: next.noteDocId
+                });
+            } else if (action === "rebind-note") {
+                if (!inspection.boundParentExists) this.assertRecoveryClaim(item, inspection.parentDocId, inspection.parentAttrs, "paper");
+                this.assertRecoveryClaim(item, inspection.noteDocId, inspection.noteAttrs, "note");
+                next.parentDocId = inspection.parentDocId;
+                next.noteDocId = inspection.noteDocId;
+            } else if (action === "rebuild-paper") {
+                const parentPath = inspection.parentExists ? `${inspection.parentPath} [${item.key}]` : inspection.parentPath;
+                next.parentDocId = await this.request("/api/filetree/createDocWithMd", {
+                    notebook: this.settings.notebook,
+                    path: parentPath,
+                    markdown: ""
+                });
+                next.noteDocId = await this.request("/api/filetree/createDocWithMd", {
+                    notebook: this.settings.notebook,
+                    path: `${parentPath}/Note`,
+                    markdown: ""
+                });
+                await this.request("/api/block/updateBlock", {
+                    dataType: "markdown",
+                    data: this.initialNoteMarkdown(item, next.noteDocId),
+                    id: next.noteDocId
+                });
+                await this.request("/api/block/updateBlock", {
+                    dataType: "markdown",
+                    data: await this.metadataMarkdown(item, next.noteDocId),
+                    id: next.parentDocId
+                });
+                next.path = parentPath;
+            } else if (action === "rebind-paper") {
+                this.assertRecoveryClaim(item, inspection.parentDocId, inspection.parentAttrs, "paper");
+                next.parentDocId = inspection.parentDocId;
+                next.path = inspection.parentPath;
+                if (inspection.noteExists) {
+                    this.assertRecoveryClaim(item, inspection.noteDocId, inspection.noteAttrs, "note");
+                    next.noteDocId = inspection.noteDocId;
+                } else {
+                    next.noteDocId = await this.request("/api/filetree/createDocWithMd", {
+                        notebook: this.settings.notebook,
+                        path: inspection.notePath,
+                        markdown: ""
+                    });
+                    await this.request("/api/block/updateBlock", {
+                        dataType: "markdown",
+                        data: this.initialNoteMarkdown(item, next.noteDocId),
+                        id: next.noteDocId
+                    });
+                }
+            } else {
+                throw new Error(`未知恢复操作：${action}`);
+            }
+            await this.saveBinding(next);
+            Object.assign(binding, next);
+            return binding;
+        });
+    }
+
+    openBindingRecovery(item, binding, inspection) {
+        return new Promise((resolve) => {
+            const dialog = new Dialog({
+                title: inspection.recoveryMode === "note" ? `恢复 Note / ${itemTitle(item)}` : `恢复论文笔记 / ${itemTitle(item)}`,
+                content: `<div class="b3-dialog__content siyuan-plugin-zotero-notes__dialog-body"><p class="siyuan-plugin-zotero-notes__hint"></p><p class="siyuan-plugin-zotero-notes__path"></p><p class="siyuan-plugin-zotero-notes__error" role="alert"></p></div><div class="b3-dialog__action" data-recovery-actions></div>`,
+                width: "min(560px, calc(100vw - 24px))"
+            });
+            dialog.element.querySelector(".siyuan-plugin-zotero-notes__hint").textContent = inspection.recoveryMode === "note"
+                ? "原 Note 未找到。可以创建新 Note，或重新绑定同一路径下已有的 Note；不会修改 Zotero 子笔记。"
+                : "原论文页未找到。可以重建论文页和 Note；已删除的正文无法由插件恢复。";
+            dialog.element.querySelector(".siyuan-plugin-zotero-notes__path").textContent = inspection.recoveryMode === "note" ? inspection.notePath : inspection.parentPath;
+            const actions = dialog.element.querySelector("[data-recovery-actions]");
+            const add = (label, action, primary = false) => {
+                const button = element("button", primary ? "b3-button b3-button--text" : "b3-button b3-button--outline", label);
+                button.addEventListener("click", async () => {
+                    button.disabled = true;
+                    try {
+                        const result = await this.recoverBindingDocument(item, binding, action, inspection);
+                        dialog.destroy();
+                        await openTab({ app: this.app, doc: { id: result.noteDocId } });
+                        resolve({ status: "recovered", ...result });
+                    } catch (error) {
+                        button.disabled = false;
+                        dialog.element.querySelector(".siyuan-plugin-zotero-notes__error").textContent = errorMessage(error);
+                    }
+                });
+                actions.append(button);
+            };
+            if (inspection.recoveryMode === "note") {
+                if (inspection.noteExists) add("重新绑定现有 Note", "rebind-note", true);
+                else add("重建 Note", "rebuild-note", true);
+                const open = element("button", "b3-button b3-button--cancel", "打开论文页");
+                open.addEventListener("click", async () => {
+                    dialog.destroy();
+                    await openTab({ app: this.app, doc: { id: inspection.parentDocId } });
+                    resolve({ status: "opened-parent", parentDocId: inspection.parentDocId, noteDocId: binding.noteDocId });
+                });
+                actions.append(open);
+            } else {
+                add("重建论文页和 Note", "rebuild-paper", true);
+                if (inspection.parentExists) add("绑定到现有同名论文页", "rebind-paper");
+            }
+            const cancel = element("button", "b3-button b3-button--cancel", this.t("cancel"));
+            cancel.addEventListener("click", () => {
+                dialog.destroy();
+                resolve({ status: "cancelled" });
+            });
+            actions.append(cancel);
+        });
+    }
+
     async createOrOpenExclusive(item, options = {}) {
         const shouldOpenTab = options.openTab !== false;
         await this.reloadBindingsFromStorage();
         const existing = this.bindings[this.bindingKey(item.key)];
-        if (existing?.parentDocId && existing?.noteDocId) {
-            if (shouldOpenTab) await openTab({ app: this.app, doc: { id: existing.parentDocId } });
-            return { parentDocId: existing.parentDocId, noteDocId: existing.noteDocId, path: existing.path || "" };
+        if (existing?.parentDocId) {
+            const inspection = await this.inspectBindingDocuments(existing, item);
+            if (inspection.boundParentExists && inspection.boundNoteExists) {
+                if (shouldOpenTab) await openTab({ app: this.app, doc: { id: existing.parentDocId } });
+                return { parentDocId: existing.parentDocId, noteDocId: existing.noteDocId, path: existing.path || inspection.parentPath };
+            }
+            if (shouldOpenTab) return this.openBindingRecovery(item, existing, inspection);
+            return { status: "recovery-required", inspection };
         }
         if (!this.settings.notebook) {
             showMessage(this.t("selectNotebook"));

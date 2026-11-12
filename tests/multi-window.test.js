@@ -62,6 +62,11 @@ test("createOrOpen uses an origin-wide lock when Web Locks are available", async
             noteDocId: "existing-note"
         }
     });
+    plugin.request = async (url) => {
+        if (url === "/api/attr/getBlockAttrs") return {};
+        if (url === "/api/filetree/getHPathByID") return "/Zotero/Paper";
+        return null;
+    };
     try {
         await plugin.createOrOpen(item);
     } finally {
