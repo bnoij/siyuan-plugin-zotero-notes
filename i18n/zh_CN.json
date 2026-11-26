@@ -78,5 +78,16 @@
   "importPapers": "导入文献",
   "advancedImport": "检索或导入 PDF",
   "checkZoteroConnection": "检查 Zotero 连接",
-  "openZoteroSettings": "打开 Zotero 笔记设置"
+  "openZoteroSettings": "打开 Zotero 笔记设置",
+  "bibliographyHeading": "参考文献",
+  "undoCitation": "撤销上一次引用操作",
+  "editCitation": "编辑此引用",
+  "citationForm": "引用形态",
+  "citationStyle": "引用样式",
+  "locateCitation": "定位到文末条目",
+  "refreshCitations": "刷新本篇引用",
+  "environmentCheck": "环境自检",
+  "replayOnboarding": "重新播放使用引导",
+  "noCitationFound": "没有找到引用",
+  "citationMissingItem": "该条目已不在 Zotero 文库中"
 }

@@ -2,18 +2,17 @@
   "name": "siyuan-plugin-zotero-notes",
   "author": "PZL",
   "url": "https://github.com/bnoij/siyuan-plugin-zotero-notes",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "minAppVersion": "3.7.0",
   "backends": ["windows", "linux", "darwin"],
   "frontends": ["desktop", "desktop-window"],
-  "disabledInPublish": true,
   "displayName": {
     "default": "Zotero Notes",
     "zh-CN": "Zotero 笔记"
   },
   "description": {
-    "default": "Browse your Zotero 10+ library in SiYuan, create paper notes, and sync notes back to Zotero.",
-    "zh-CN": "在思源中浏览 Zotero 10+ 文库，创建论文笔记，并将笔记回传到 Zotero。"
+    "default": "Browse your Zotero 10+ library in SiYuan, create paper notes, insert citations, and sync notes back to Zotero.",
+    "zh-CN": "在思源中浏览 Zotero 10+ 文库，创建论文笔记、插入文献引用，并将笔记回传到 Zotero。"
   },
   "readme": {
     "default": "README.md",
@@ -21,5 +20,5 @@
   },
   "icon": "icon.png",
   "preview": "preview.png",
-  "keywords": ["plugin", "zotero", "literature", "notes", "文献", "笔记", "kikit-generated"]
+  "keywords": ["plugin", "zotero", "literature", "notes", "citation", "bibliography", "文献", "笔记", "引用", "参考文献"]
 }

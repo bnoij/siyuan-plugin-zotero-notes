@@ -68,8 +68,8 @@ test("refreshCitationTree updates numeric link labels in place without rewriting
     await plugin.refreshCitationTree("root");
     assert.equal(updates.length, 1);
     assert.equal(updates[0].id, "citation-block");
-    assert.match(updates[0].data, /\[1\]\(zotero:\/\/select\/library\/items\/A/);
-    assert.match(updates[0].data, /\[2\]\(zotero:\/\/select\/library\/items\/B/);
+    assert.match(updates[0].data, /\[\[1\]\]\(zotero:\/\/select\/library\/items\/A/);
+    assert.match(updates[0].data, /\[\[2\]\]\(zotero:\/\/select\/library\/items\/B/);
     assert.doesNotMatch(updates[0].data, /\[9\]|\[8\]/);
 });
 

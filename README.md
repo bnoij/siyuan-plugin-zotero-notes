@@ -4,9 +4,9 @@
 
 A SiYuan desktop plugin for browsing a Zotero 10+ library, creating paper notes on demand, and syncing a SiYuan `Note` document back to the corresponding Zotero item.
 
-> **Internal testing preview**
+> **Release 0.6.0**
 >
-> This plugin is still undergoing internal testing. Back up your SiYuan workspace and Zotero data before use, and avoid using it as the only copy of important notes. Please test first in a non-production workspace. Bug reports, reproduction steps, and feature suggestions are welcome through [GitHub Issues](https://github.com/bnoij/siyuan-plugin-zotero-notes/issues).
+> This release is prepared for public distribution: download `package.zip` from the repository [Releases](https://github.com/bnoij/siyuan-plugin-zotero-notes/releases). Keep an independent backup of your SiYuan workspace and Zotero data, and report reproduction steps or ideas through [GitHub Issues](https://github.com/bnoij/siyuan-plugin-zotero-notes/issues).
 
 ![Zotero Notes preview](preview.png)
 
@@ -28,6 +28,16 @@ A SiYuan desktop plugin for browsing a Zotero 10+ library, creating paper notes 
 - Migrates existing paper notes under a new root document automatically when the notebook or root document name changes, renaming same-title documents with an itemKey suffix.
 - Uses SiYuan theme variables for the Dock panel and buttons so it adapts to light, dark, and third-party themes.
 - Inserts numeric, author-date, or narrative citations from a multi-item selector and maintains a refreshable bibliography.
+- Adds a right-click menu on citations: edit the citation (add or remove items), switch the form, switch the style, locate the entry in the bibliography, and refresh the citations of the current document.
+- Keeps an undo stack for citation operations (20 steps per document, `Ctrl+Alt+Z`), covering the writes that the editor `Ctrl+Z` cannot reach.
+- Stores the last rendered text of every cited item as a document snapshot, so entries deleted from Zotero or missing on another machine are still shown from the snapshot and explicitly reported.
+- Makes the bibliography heading configurable and appends a ↗ link that selects the entry in Zotero.
+- Shows a four-step getting started guide on first use, replayable from the settings.
+- Offers "merge (fill empty fields only)" when importing, so duplicates do not have to be recreated.
+- Applies default tags to every paper document after saving, keeping the tags you already set.
+- Adds a citation key column to the paper database, with an optional `{author}{year}{title}` template used by the exports.
+- Provides an environment check that reports the Zotero connection, the pdf2zh executable, and the secret configuration in one view.
+- Shows live translation progress and failure reasons in the bottom-left status bar.
 - Imports PDF highlights, comments, page numbers, and Zotero deep links into a managed Note annotation section without changing other content.
 - Exports GB/T 7714, APA, IEEE, BibTeX/BibLaTeX, Typst, and LaTeX citations, plus Markdown, Word, and LaTeX documents.
 - Provides safe initial Note templates with whitelisted metadata and if/range controls, never arbitrary JavaScript evaluation.
@@ -55,7 +65,7 @@ Zotero 7, group libraries, mobile frontends, and the Zotero cloud Web API are no
 2. Extract it into `data/plugins/siyuan-plugin-zotero-notes/` in your SiYuan workspace.
 3. Restart SiYuan and enable **Zotero Notes** under **Settings → Marketplace → Downloaded**.
 
-The plugin is not yet listed in the SiYuan bazaar. Marketplace availability will be announced after the testing and release process is complete.
+The plugin is being submitted to the SiYuan bazaar. Until it is listed there, install it from the Releases archive as described above.
 
 ## Usage
 
@@ -71,6 +81,15 @@ The plugin is not yet listed in the SiYuan bazaar. Marketplace availability will
 Each item offers **Create/Open note**, **Refresh metadata**, **Sync Note**, **Import PDF annotations**, and **Select in Zotero**. Actions requiring an existing document stay disabled until it exists.
 
 The top-bar plugin menu opens the multi-item citation selector and export dialog. Citation links keep stable itemKeys, bibliographies are formatted by the Zotero Local API, and refreshes update only plugin-marked bibliography blocks. Bibliographies and the PDF annotation section are managed regions rebuilt on refresh; do not write content there that you need to preserve. Exports are static output, not editable Zotero fields in Word; complex custom CSL in-text rules are not guaranteed to be reproduced exactly.
+
+## Citation workflow (0.6.0)
+
+- A citation is a link carrying the `zotero://` scheme: `[Author (2024)](zotero://select/library/items/KEY?f=author-date&zkeys=KEY)`. The `f=` parameter records the form of that site (`csl` for numeric, plus `author-date` and `narrative`), and `zkeys=` records every item cited there.
+- Right-clicking a citation opens the menu: edit the citation (add or remove items), switch the form, switch the global style, locate the entry in the bibliography, refresh the citations of this document, or open the plugin settings.
+- Numbers follow the order in which the citations first appear in the text. After removing a citation, run "refresh citations in this document" so the bibliography drops the entry as well.
+- The bibliography is a managed region like the PDF annotation section: it is rebuilt on refresh, so do not keep content there that you need to preserve.
+- When an item was deleted from Zotero or is missing on another machine, the bibliography falls back to the stored snapshot and marks the entry as "no longer in the Zotero library".
+- Kernel writes do not enter the editor undo stack. Use "Undo the last citation operation" in the command palette, or `Ctrl+Alt+Z`, to step back through citation changes (20 steps kept per document).
 
 ## Interaction and recovery (0.5.1)
 
@@ -137,11 +156,11 @@ Every `ensure_papers` run first ensures that the personal library has a `daily` 
 
 The plugin is directly loadable CommonJS with no npm dependencies and no build step. Runtime files are located at the repository root.
 
-A release archive contains `plugin.json`, `index.js`, `index.css`, `i18n/`, both README files, `icon.png`, `preview.png`, and `LICENSE` at its root.
+A release archive mirrors the repository layout: `plugin.json`, `index.js`, `index.css`, `i18n/`, both README files, `icon.png`, `preview.png`, `LICENSE`, `package.json`, and the `tests/` suite at its root.
 
 ### Automated checks
 
-With Node.js 22 or later, run `npm test` for lifecycle and multi-window regressions, or `npm run check` for both syntax and tests. The tests cover startup persistence, unchanged-cache writes, `onDataChanged`, background imports, cross-window binding merges, and origin-wide document-creation locks. Development-only test files are excluded from `package.zip`.
+With Node.js 22 or later, run `npm test` for lifecycle and multi-window regressions, or `npm run check` for both syntax and tests. The tests cover startup persistence, unchanged-cache writes, `onDataChanged`, background imports, cross-window binding merges, origin-wide document-creation locks, and the citation interaction (right-click actions, renumbering, snapshot fallback, undo). The `tests/` suite ships with the archive so the checks can be reproduced from the downloaded package; the plugin never loads those files at runtime.
 
 ## Feedback
 

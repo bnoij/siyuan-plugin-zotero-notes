@@ -5,7 +5,7 @@ const { makePlugin, remoteItem } = require("./helpers/load-plugin.js");
 const ALL_KEYS = [
     "notebook", "rootName", "authorLimit",
     "autoImport", "syncMode", "librarySyncInterval", "noteSyncInterval", "workflowQueueEnabled",
-    "citationStyle", "citationForm", "noteTemplate",
+    "citationStyle", "citationForm", "bibliographyHeading", "citeKeyFormat", "defaultPaperTags", "noteTemplate",
     "pdf2zhPath", "translationSource", "translationTarget", "translationConcurrency", "translationDualConcurrency", "translationSecretNames"
 ];
 

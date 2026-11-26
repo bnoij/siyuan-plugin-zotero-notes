@@ -15,6 +15,21 @@ const ATTR_STYLE = "custom-zotero-style";
 const ATTR_BIB = "custom-zotero-bib";
 const ATTR_ANNOTATIONS = "custom-zotero-annotations";
 const ATTR_LIBRARY_DATA = "custom-zotero-library-data";
+const ATTR_BIBSNAP = "custom-zotero-bibsnap";
+const CITATION_FORMS = ["numeric", "author-date", "narrative"];
+const CITATION_STYLES = [
+    ["ieee", "IEEE"],
+    ["apa", "APA 7"],
+    ["china-national-standard-gb-t-7714-2015-numeric", "GB/T 7714 顺序编码"],
+    ["china-national-standard-gb-t-7714-2015-author-date", "GB/T 7714 著者-出版年"],
+    ["chicago-author-date", "Chicago 著者-出版年"],
+    ["modern-language-association", "MLA"],
+    ["nature", "Nature"],
+    ["science", "Science"],
+    ["acm", "ACM"],
+    ["elsevier-with-harvard", "Elsevier Harvard"],
+    ["turabian", "Turabian"]
+];
 const DEFAULT_SETTINGS = {
     notebook: "",
     rootName: "Zotero",
@@ -32,7 +47,11 @@ const DEFAULT_SETTINGS = {
     translationDualConcurrency: 4,
     translationSecretNames: [],
     citationStyle: "ieee",
-    citationForm: "numeric"
+    citationForm: "numeric",
+    bibliographyHeading: "auto",
+    defaultPaperTags: "",
+    citeKeyFormat: "",
+    onboardingCompleted: false
 };
 const FALLBACK = {
     pluginName: "Zotero 笔记",
@@ -104,7 +123,18 @@ const FALLBACK = {
     lossBlockRef: "思源块引用与思源链接：在 Zotero 中无法跳转回思源",
     insertCitation: "插入文献引用",
     importAnnotations: "导入 PDF 标注",
-    exportContent: "导出引用或当前文档"
+    exportContent: "导出引用或当前文档",
+    bibliographyHeading: "参考文献",
+    undoCitation: "撤销上一次引用操作",
+    editCitation: "编辑此引用",
+    citationForm: "引用形态",
+    citationStyle: "引用样式",
+    locateCitation: "定位到文末条目",
+    refreshCitations: "刷新本篇引用",
+    environmentCheck: "环境自检",
+    replayOnboarding: "重新播放使用引导",
+    noCitationFound: "没有找到引用",
+    citationMissingItem: "该条目已不在 Zotero 文库中"
 };
 const PLUGIN_ICONS = `
 <symbol id="zoteroNotesIconNote" viewBox="0 0 16 16"><path d="M4 1.5h5.3L13 5.2v8.3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M9.3 1.5V5.2H13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M5.8 11.4h4.4M5.8 8.7h4.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></symbol>
@@ -377,6 +407,12 @@ class ZoteroNotesPlugin extends Plugin {
         });
         this.registerInteractionCommands();
         this.registerAgentActions();
+        this.citationUndo = new Map();
+        this.citationContext = null;
+        this.citationContextHandler = (event) => {
+            this.citationContext = this.citationContextAnchor(event);
+        };
+        if (typeof window !== "undefined") window.addEventListener("contextmenu", this.citationContextHandler, true);
         this.startAutoSync();
     }
 
@@ -412,9 +448,12 @@ class ZoteroNotesPlugin extends Plugin {
             ["importPapers", () => this.openImportDialog()],
             ["advancedImport", () => this.openAdvancedImportDialog()],
             ["checkZoteroConnection", () => this.checkZoteroConnection()],
+            ["environmentCheck", () => this.openEnvironmentCheck()],
+            ["replayOnboarding", () => this.openOnboarding()],
             ["openZoteroSettings", () => this.openSetting()]
         ];
         for (const [langKey, operation] of commands) this.addCommand({ langKey, hotkey: "", callback: command(operation) });
+        this.addCommand({ langKey: "undoCitation", hotkey: "Ctrl+Alt+Z", callback: command(() => this.undoLastCitation()) });
         this.registerDocumentMenus();
     }
 
@@ -505,6 +544,23 @@ class ZoteroNotesPlugin extends Plugin {
     async addDocumentMenuItems(docId, menu) {
         if (!docId || !menu) return;
         try {
+            const anchor = this.freshCitationAnchor();
+            if (anchor) {
+                anchor.docId = docId;
+                menu.addItem({ icon: "iconEdit", label: `${this.t("editCitation")}…`, click: () => this.enqueue(() => this.editCitationAt(anchor)) });
+                menu.addItem({
+                    icon: "iconText",
+                    label: this.t("citationForm"),
+                    submenu: [
+                        { label: "数字式 [1]", click: () => this.enqueue(() => this.setCitationFormAt(anchor, "numeric")) },
+                        { label: "作者-年份 (Author, 2020)", click: () => this.enqueue(() => this.setCitationFormAt(anchor, "author-date")) },
+                        { label: "叙述式 Author (2020)", click: () => this.enqueue(() => this.setCitationFormAt(anchor, "narrative")) }
+                    ]
+                });
+                menu.addItem({ icon: "iconSettings", label: `${this.t("citationStyle")}…`, click: () => this.openCitationStyleDialog() });
+                menu.addItem({ icon: "iconDown", label: this.t("locateCitation"), click: () => this.enqueue(() => this.locateCitationInBibliography(anchor)) });
+                menu.addItem({ icon: "iconRefresh", label: this.t("refreshCitations"), click: () => this.enqueue(() => this.refreshDocumentCitations(docId)) });
+            }
             const bindingEntry = Object.entries(this.bindings).find(([, binding]) => binding.parentDocId === docId || binding.noteDocId === docId);
             if (!bindingEntry) {
                 menu.addItem({ icon: "iconLink", label: "插入 Zotero 引用", click: () => this.openCitationSelector() });
@@ -515,6 +571,7 @@ class ZoteroNotesPlugin extends Plugin {
             const [bindingKey, binding] = bindingEntry;
             const item = this.library.items.find((candidate) => candidate.key === binding.itemKey);
             if (!item) return;
+            if (!anchor) menu.addItem({ icon: "iconLink", label: "插入 Zotero 引用", click: () => this.openCitationSelector() });
             const needsRecovery = this.recoveryRequired.has(item.key);
             menu.addItem({ icon: "iconNote", label: needsRecovery ? "恢复 Note" : "打开 Note", click: () => this.enqueue(() => this.createOrOpen(item)) });
             menu.addItem({ icon: "iconRefresh", label: this.t("refreshMetadata"), click: () => this.enqueue(() => this.refreshMetadata(item)) });
@@ -611,6 +668,9 @@ class ZoteroNotesPlugin extends Plugin {
     async onLayoutReady() {
         await this.rebuildBindings();
         this.startWorkflowQueue();
+        if (!this.settings.onboardingCompleted && typeof document !== "undefined") {
+            setTimeout(() => this.openOnboarding(), 1200);
+        }
         if (this.settings.autoImport) {
             this.refreshLibrary(false).catch((error) => {
                 if (error.name !== "AbortError") this.renderStatus(errorMessage(error));
@@ -651,6 +711,9 @@ class ZoteroNotesPlugin extends Plugin {
         this.eventBus?.off?.("GetFromPool", this.agentEventHandlers?.GetFromPool);
         this.eventBus?.off?.("Refresh", this.agentEventHandlers?.Refresh);
         for (const [name, handler] of Object.entries(this.documentMenuHandlers || {})) this.eventBus?.off?.(name, handler);
+        if (this.citationContextHandler && typeof window !== "undefined") window.removeEventListener("contextmenu", this.citationContextHandler, true);
+        this.citationUndo?.clear?.();
+        this.citationContext = null;
         this.dockElement = null;
     }
 
@@ -668,6 +731,12 @@ class ZoteroNotesPlugin extends Plugin {
         merged.translationDualConcurrency = clampInteger(merged.translationDualConcurrency, 1, 128, DEFAULT_SETTINGS.translationDualConcurrency);
         const secretNames = Array.isArray(merged.translationSecretNames) ? merged.translationSecretNames : String(merged.translationSecretNames || "").split(",");
         merged.translationSecretNames = [...new Set(secretNames.map((name) => String(name).trim()).filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))];
+        merged.citationStyle = cleanText(merged.citationStyle) || DEFAULT_SETTINGS.citationStyle;
+        merged.citationForm = CITATION_FORMS.includes(merged.citationForm) ? merged.citationForm : DEFAULT_SETTINGS.citationForm;
+        merged.bibliographyHeading = typeof merged.bibliographyHeading === "string" ? merged.bibliographyHeading : DEFAULT_SETTINGS.bibliographyHeading;
+        merged.defaultPaperTags = typeof merged.defaultPaperTags === "string" ? merged.defaultPaperTags : "";
+        merged.citeKeyFormat = cleanText(merged.citeKeyFormat) || DEFAULT_SETTINGS.citeKeyFormat;
+        merged.onboardingCompleted = !!merged.onboardingCompleted;
         return merged;
     }
 
@@ -1019,8 +1088,11 @@ class ZoteroNotesPlugin extends Plugin {
                 { key: "workflowQueueEnabled", label: this.t("workflowQueueEnabled"), type: "checkbox", hint: this.t("workflowQueueEnabledTip") }
             ] },
             { id: "writing", label: "写作", fields: [
-                { key: "citationStyle", label: "引用样式", type: "select", options: [["ieee", "IEEE"], ["apa", "APA 7"], ["china-national-standard-gb-t-7714-2015-numeric", "GB/T 7714"]] },
-                { key: "citationForm", label: "正文引用形式", type: "select", options: [["numeric", "Numeric"], ["author-date", "Author-date"], ["narrative", "Narrative"]] },
+                { key: "citationStyle", label: "引用样式", type: "select", options: CITATION_STYLES },
+                { key: "citationForm", label: "正文引用形式", type: "select", options: [["numeric", "数字式 [1]"], ["author-date", "作者-年份 (Author, 2020)"], ["narrative", "叙述式 Author (2020)"]] },
+                { key: "bibliographyHeading", label: "文末文献表标题", type: "select", options: [["auto", "自动（参考文献）"], ["none", "不生成标题"], ["参考文献", "参考文献"], ["References", "References"], ["Bibliography", "Bibliography"]], hint: "自动时使用当前界面语言的默认标题；也可以填写任意文字。" },
+                { key: "citeKeyFormat", label: "引用键格式", type: "text", hint: "留空表示沿用 Zotero 条目 key；可用 {author} {year} {title} 生成引用键，用于文献数据库与 BibTeX / LaTeX / Typst 导出。" },
+                { key: "defaultPaperTags", label: "论文文档默认标签", type: "text", hint: "多个标签用英文逗号分隔；保存后应用到全部论文文档，已有标签保留。" },
                 { key: "noteTemplate", label: "Note 初始模板", type: "textarea", hint: "只用于新建 Note；恢复或认领不会改写已有内容。" }
             ] },
             { id: "translation", label: "翻译", fields: [
@@ -1033,7 +1105,9 @@ class ZoteroNotesPlugin extends Plugin {
                 { key: "openSecrets", label: "打开密钥和变量设置", type: "action" }
             ] },
             { id: "advanced", label: "高级", fields: [
-                { key: "bindingCheck", label: "检查失效绑定", type: "action", hint: "仅在点击后检查，不进行后台批量探测。" }
+                { key: "bindingCheck", label: "检查失效绑定", type: "action", hint: "仅在点击后检查，不进行后台批量探测。" },
+                { key: "environmentCheck", label: "环境自检", type: "action", hint: "检查 Zotero 连接、pdf2zh 可执行文件与密钥名称配置。" },
+                { key: "replayOnboarding", label: "重新播放使用引导", type: "action" }
             ] }
         ];
     }
@@ -1092,6 +1166,8 @@ class ZoteroNotesPlugin extends Plugin {
             if (field.key === "testConnection") button.addEventListener("click", () => this.checkZoteroConnection().catch((error) => showMessage(errorMessage(error), 8000)));
             if (field.key === "openSecrets") button.addEventListener("click", () => this.openSecretsVariables());
             if (field.key === "bindingCheck") button.addEventListener("click", () => this.openBindingIssueDialog());
+            if (field.key === "environmentCheck") button.addEventListener("click", () => this.openEnvironmentCheck().catch((error) => showMessage(errorMessage(error), 8000)));
+            if (field.key === "replayOnboarding") button.addEventListener("click", () => this.openOnboarding());
             wrapper.append(button);
         } else {
             let control;
@@ -1157,7 +1233,7 @@ class ZoteroNotesPlugin extends Plugin {
     }
 
     async saveSettingsDraft() {
-        const previous = { notebook: this.settings.notebook, rootName: this.settings.rootName };
+        const previous = { notebook: this.settings.notebook, rootName: this.settings.rootName, defaultPaperTags: this.settings.defaultPaperTags };
         this.settings = this.normalizeSettings({ ...this.settings, ...this.settingsDraft });
         this.settingsDraft = { ...this.settings };
         await this.saveData("settings.json", this.settings);
@@ -1167,6 +1243,11 @@ class ZoteroNotesPlugin extends Plugin {
         this.startWorkflowQueue();
         if (previous.notebook !== this.settings.notebook || previous.rootName !== this.settings.rootName) {
             this.enqueue(() => this.migrateBindings());
+        }
+        if (previous.defaultPaperTags !== this.settings.defaultPaperTags) {
+            this.enqueue(() => this.applyDefaultPaperTagsToAll().then((result) => {
+                showMessage(result.errors.length ? `部分标签应用失败：${result.errors.slice(0, 2).join("；")}` : `已为 ${result.applied} 篇论文文档应用默认标签`, 5000);
+            }));
         }
     }
 
@@ -1737,6 +1818,7 @@ class ZoteroNotesPlugin extends Plugin {
             data: await this.metadataMarkdown(item, binding.noteDocId),
             id: binding.parentDocId
         });
+        await this.applyDefaultPaperTags(binding.parentDocId);
         await this.saveBinding(binding);
         showMessage(this.t("noteCreated"));
         if (shouldOpenTab) await openTab({ app: this.app, doc: { id: binding.noteDocId } });
@@ -1887,7 +1969,8 @@ class ZoteroNotesPlugin extends Plugin {
             ["journal", "期刊"],
             ["doi", "DOI"],
             ["tags", "标签"],
-            ["url", "链接"]
+            ["url", "链接"],
+            ["citekey", "引用键"]
         ];
     }
 
@@ -1896,6 +1979,7 @@ class ZoteroNotesPlugin extends Plugin {
             return { type: "mSelect", mSelect: (item.data?.tags || []).map((tag, index) => ({ content: tag.tag, color: String(index % 14 + 1) })).filter((value) => value.content) };
         }
         if (field === "url") return { type: "url", url: { content: cleanText(item.data?.url) } };
+        if (field === "citekey") return { type: "text", text: { content: this.citeKeyFor(item) } };
         const values = {
             title: itemTitle(item),
             authors: itemAuthors(item),
@@ -2197,9 +2281,7 @@ class ZoteroNotesPlugin extends Plugin {
     }
 
     citationText(item, form = "numeric", number, locator = "") {
-        const creators = (item?.data?.creators || []).filter((creator) => !creator.creatorType || creator.creatorType === "author");
-        const names = creators.map((creator) => cleanText(creator.lastName) || cleanText(creator.name).split(/\s+/).at(-1)).filter(Boolean);
-        const authors = names.length > 2 ? `${names[0]} et al.` : names.join(" & ") || "Unknown";
+        const authors = this.citationAuthorText(item);
         const year = itemYear(item) || "n.d.";
         const suffix = locator ? `, ${cleanText(locator)}` : "";
         if (form === "numeric") return `[${number || 1}${suffix}]`;
@@ -2207,25 +2289,67 @@ class ZoteroNotesPlugin extends Plugin {
         return `(${authors}, ${year}${suffix})`;
     }
 
-    citationLink(keys, text) {
+    citationAuthorNames(item) {
+        return (item?.data?.creators || [])
+            .filter((creator) => !creator.creatorType || creator.creatorType === "author")
+            .map((creator) => cleanText(creator.lastName) || cleanText(creator.name).split(/\s+/).at(-1))
+            .filter(Boolean);
+    }
+
+    citationAuthorText(item) {
+        const names = this.citationAuthorNames(item);
+        if (!names.length) return "Unknown";
+        if (names.length === 1) return names[0];
+        if (names.length === 2) return `${names[0]} & ${names[1]}`;
+        if (names.length === 3) return `${names[0]}, ${names[1]} & ${names[2]}`;
+        return `${names[0]} et al.`;
+    }
+
+    citationLink(keys, text, form = "numeric") {
         const unique = [...new Set(keys)].filter(Boolean);
-        const query = `?f=csl&zkeys=${encodeURIComponent(unique.join(","))}`;
+        if (!unique.length) return "";
+        // 数字式沿用历史的 f=csl 标记：既有文档里的引用链接不改写也能被继续识别
+        const safeForm = form === "author-date" || form === "narrative" ? form : "csl";
+        const query = `?f=${encodeURIComponent(safeForm)}&zkeys=${encodeURIComponent(unique.join(","))}`;
         return `[${text}](zotero://select/library/items/${unique[0]}${query})`;
+    }
+
+    citationLinkKeys(href) {
+        const value = String(href || "");
+        const match = value.match(/zotero:\/\/select\/library\/items\/([^?)\s]+)(?:\?([^)\s]*))?/);
+        if (!match) return [];
+        const keys = [];
+        for (const part of (match[2] || "").split("&")) {
+            const separator = part.indexOf("=");
+            if ((separator >= 0 ? part.slice(0, separator) : part) !== "zkeys") continue;
+            const raw = separator >= 0 ? part.slice(separator + 1) : "";
+            for (const key of decodeURIComponent(raw).split(",")) {
+                if (key) keys.push(key);
+            }
+        }
+        if (!keys.length) {
+            for (const key of match[1].split(",")) {
+                if (key) keys.push(key);
+            }
+        }
+        return [...new Set(keys)];
+    }
+
+    citationLinkForm(href) {
+        const match = String(href || "").match(/[?&]f=([^&)\s]+)/);
+        const form = match ? decodeURIComponent(match[1]) : "";
+        return CITATION_FORMS.includes(form) ? form : "numeric";
     }
 
     renumberCitationMarkdown(markdown, entries) {
         return String(markdown || "").replace(/\[([^\]\n]*)\]\((zotero:\/\/select\/library\/items\/[^)\s]+)\)/g, (match, label, url) => {
-            let keys;
-            try {
-                const parsed = new URL(url);
-                keys = (parsed.searchParams.get("zkeys") || "").split(",").filter(Boolean);
-            } catch {
-                return match;
-            }
+            const keys = this.citationLinkKeys(url);
             if (!keys.length) return match;
+            if (/[?&]bib=1\b/.test(url)) return match;
+            if (this.citationLinkForm(url) !== "numeric") return match;
             const citations = keys.map((key) => entries.find((entry) => entry.key === key));
-            if (citations.some((entry) => !entry || entry.form !== "numeric")) return match;
-            return `[${citations.map((entry) => entry.number).join(",")}](${url})`;
+            if (citations.some((entry) => !entry || !entry.number)) return match;
+            return `[[${citations.map((entry) => entry.number).join(", ")}]](${url})`;
         });
     }
 
@@ -2335,7 +2459,22 @@ class ZoteroNotesPlugin extends Plugin {
             }
             const style = attrs[ATTR_STYLE] || this.settings.citationStyle;
             const entries = await this.formatBibliography(registry.map((entry) => entry.key), style);
-            const markdown = `{{{row\n# 参考文献\n\n${entries.map((entry) => `- ${markdownText(entry.text)}`).join("\n")}\n}}}`;
+            const snapshot = await this.readCitationSnapshot(docId);
+            const nextSnapshot = { ...snapshot };
+            const lines = entries.map((entry) => {
+                let text = entry.text;
+                if (entry.missing) {
+                    const saved = snapshot[entry.key];
+                    if (saved?.text) text = saved.text;
+                    text = `${text}（${this.t("citationMissingItem")}）`;
+                } else {
+                    nextSnapshot[entry.key] = { text: entry.text };
+                }
+                return `- ${markdownText(text)} [↗](zotero://select/library/items/${entry.key}?bib=1)`;
+            });
+            const heading = this.bibliographyHeading();
+            const body = heading ? `# ${heading}\n\n${lines.join("\n")}` : lines.join("\n");
+            const markdown = `{{{row\n${body}\n}}}`;
             const rows = await this.request("/api/query/sql", {
                 stmt: `SELECT a.block_id FROM attributes a JOIN blocks b ON a.block_id = b.id WHERE a.name = '${ATTR_BIB}' AND b.root_id = '${docId}' LIMIT 1`
             });
@@ -2348,6 +2487,7 @@ class ZoteroNotesPlugin extends Plugin {
             }
             if (!blockId) throw new Error("Unable to locate bibliography block");
             await this.request("/api/attr/setBlockAttrs", { id: blockId, attrs: { [ATTR_BIB]: "true" } });
+            await this.saveCitationSnapshot(docId, nextSnapshot);
         });
     }
 
@@ -2445,15 +2585,15 @@ class ZoteroNotesPlugin extends Plugin {
     citationMarkdown(items, form = this.settings.citationForm, registry = []) {
         const keys = items.map((item) => item.key);
         if (form === "numeric") {
-            const text = items.map((item, index) => {
+            const numbers = items.map((item, index) => {
                 const foundIndex = registry.findIndex((entry) => entry.key === item.key);
                 const found = registry[foundIndex];
                 return found?.number || (foundIndex >= 0 ? foundIndex + 1 : registry.length + index + 1);
-            }).join(",");
-            return this.citationLink(keys, text);
+            });
+            return this.citationLink(keys, `[${numbers.join(", ")}]`, form);
         }
         const text = items.map((item) => this.citationText(item, form, registry.findIndex((entry) => entry.key === item.key) + 1)).join("; ");
-        return this.citationLink(keys, text);
+        return this.citationLink(keys, text, form);
     }
 
     async insertCitations(items, options = {}) {
@@ -2530,6 +2670,525 @@ class ZoteroNotesPlugin extends Plugin {
         });
     }
 
+    /* ---------------- 引用引擎：编号 / 文末表 / 快照 / 撤销 ---------------- */
+
+    async updateSettings(patch) {
+        this.settings = this.normalizeSettings({ ...this.settings, ...(patch || {}) });
+        this.settingsDraft = { ...this.settings };
+        await this.saveData("settings.json", this.settings);
+        return this.settings;
+    }
+
+    bibliographyHeading() {
+        const value = cleanText(this.settings.bibliographyHeading);
+        if (!value || value === "auto") return this.t("bibliographyHeading");
+        if (value === "none") return "";
+        return value;
+    }
+
+    citationLabel(keys, form, numbers) {
+        const items = keys.map((key) => this.library.items.find((item) => item.key === key)).filter(Boolean);
+        if (!items.length) return "";
+        if (form === "numeric") {
+            const values = keys.map((key) => numbers?.get(key)).filter((value) => value !== undefined && value !== null);
+            if (!values.length) return "";
+            return `[${values.join(", ")}]`;
+        }
+        return items.map((item) => this.citationText(item, form, numbers?.get(item.key))).join("; ");
+    }
+
+    async documentCitationSites(docId) {
+        const exported = await this.request("/api/export/exportMdContent", { id: docId });
+        const content = String(exported?.content || "");
+        const pattern = /\[([^\]\n]*)\]\((zotero:\/\/select\/library\/items\/[^)\s]+)\)/g;
+        const sites = [];
+        let match;
+        while ((match = pattern.exec(content))) {
+            if (/[?&]bib=1\b/.test(match[2])) continue;
+            sites.push({ text: match[1], href: match[2], keys: this.citationLinkKeys(match[2]), form: this.citationLinkForm(match[2]) });
+        }
+        return sites;
+    }
+
+    async citationNumbers(docId) {
+        const sites = await this.documentCitationSites(docId);
+        const numbers = new Map();
+        for (const site of sites) {
+            for (const key of site.keys) {
+                if (!numbers.has(key)) numbers.set(key, numbers.size + 1);
+            }
+        }
+        return { sites, numbers };
+    }
+
+    rewriteCitationMarkdown(markdown, numbers) {
+        return String(markdown || "").replace(/\[([^\]\n]*)\]\((zotero:\/\/select\/library\/items\/[^)\s]+)\)/g, (match, text, href) => {
+            const keys = this.citationLinkKeys(href);
+            if (!keys.length) return match;
+            if (/[?&]bib=1\b/.test(href)) return match;
+            const form = this.citationLinkForm(href);
+            const label = this.citationLabel(keys, form, numbers);
+            if (!label) return match;
+            return this.citationLink(keys, label, form) || match;
+        });
+    }
+
+    async rewriteCitationBlocks(docId, numbers) {
+        const rows = await this.request("/api/query/sql", {
+            stmt: `SELECT id, markdown FROM blocks WHERE root_id = '${docId}' AND markdown LIKE '%zotero://select/library/items/%'`
+        });
+        let changed = 0;
+        for (const row of Array.isArray(rows) ? rows : []) {
+            const markdown = String(row.markdown || "");
+            const next = this.rewriteCitationMarkdown(markdown, numbers);
+            if (next !== markdown) {
+                await this.request("/api/block/updateBlock", { dataType: "markdown", data: next, id: row.id });
+                changed++;
+            }
+        }
+        return changed;
+    }
+
+    async readCitationSnapshot(docId) {
+        const attrs = await this.request("/api/attr/getBlockAttrs", { id: docId });
+        try {
+            const data = JSON.parse(attrs?.[ATTR_BIBSNAP] || "{}");
+            return data && typeof data === "object" ? data : {};
+        } catch {
+            return {};
+        }
+    }
+
+    async saveCitationSnapshot(docId, snapshot) {
+        await this.request("/api/attr/setBlockAttrs", { id: docId, attrs: { [ATTR_BIBSNAP]: JSON.stringify(snapshot || {}) } });
+    }
+
+    async refreshDocumentCitations(docId) {
+        const { sites, numbers } = await this.citationNumbers(docId);
+        const attrs = await this.request("/api/attr/getBlockAttrs", { id: docId });
+        const previous = this.citationRegistryFromAttrs(attrs);
+        const registry = [];
+        const seen = new Set();
+        for (const site of sites) {
+            for (const key of site.keys) {
+                if (seen.has(key)) continue;
+                seen.add(key);
+                const existing = previous.find((entry) => entry.key === key);
+                registry.push(existing ? { ...existing, form: existing.form || site.form } : { key, form: site.form, locator: "" });
+            }
+        }
+        await this.request("/api/attr/setBlockAttrs", {
+            id: docId,
+            attrs: { [ATTR_CITES]: JSON.stringify(registry), [ATTR_STYLE]: this.settings.citationStyle }
+        });
+        await this.rewriteCitationBlocks(docId, numbers);
+        await this.refreshBibliography(docId);
+        return registry.length;
+    }
+
+    stripBlockAttributes(kramdown) {
+        return String(kramdown || "").replace(/\{:([^{}\n]*)\}/g, (match, body) => {
+            const cleaned = body.replace(/\s*id="[^"]*"/g, "").replace(/\s*updated="[^"]*"/g, "").trim();
+            return cleaned ? `{:${cleaned}}` : "";
+        });
+    }
+
+    async patchCitationAt(anchor, mutate) {
+        const blockId = anchor?.blockId;
+        if (!blockId) throw new Error(this.t("noCitationFound"));
+        const result = await this.request("/api/block/getBlockKramdown", { id: blockId });
+        const kramdown = String(result?.kramdown || "");
+        let changed = false;
+        const next = kramdown.replace(/\[([^\]\n]*)\]\((zotero:\/\/select\/library\/items\/[^)\s]+)\)/g, (match, text, href) => {
+            const keys = this.citationLinkKeys(href);
+            if (!keys.length || keys.join(",") !== anchor.keys.join(",")) return match;
+            if (/[?&]bib=1\b/.test(href)) return match;
+            const outcome = mutate({ keys, text, form: this.citationLinkForm(href) });
+            if (!outcome) return match;
+            changed = true;
+            if (outcome.remove) return "";
+            return this.citationLink(outcome.keys, outcome.text, outcome.form) || match;
+        });
+        if (!changed) return false;
+        this.pushCitationUndo(anchor.docId, [{ id: blockId, kramdown }], "修改引用");
+        await this.request("/api/block/updateBlock", { dataType: "markdown", data: this.stripBlockAttributes(next), id: blockId });
+        return true;
+    }
+
+    pushCitationUndo(docId, blocks, label) {
+        if (!this.citationUndo) this.citationUndo = new Map();
+        const stack = this.citationUndo.get(docId) || [];
+        stack.push({ ts: Date.now(), label: label || "引用操作", blocks: blocks || [] });
+        while (stack.length > 20) stack.shift();
+        this.citationUndo.set(docId, stack);
+    }
+
+    async undoLastCitation() {
+        const stacks = this.citationUndo || new Map();
+        let docId = getActiveEditor()?.protyle?.block?.rootID || "";
+        if (!stacks.get(docId)?.length) {
+            let best = "";
+            let bestTs = 0;
+            for (const [id, stack] of stacks) {
+                const ts = stack.length ? stack[stack.length - 1].ts : 0;
+                if (ts > bestTs) {
+                    bestTs = ts;
+                    best = id;
+                }
+            }
+            docId = best;
+        }
+        const stack = stacks.get(docId) || [];
+        if (!stack.length) {
+            showMessage("这篇文档没有可撤销的引用操作。", 4000);
+            return;
+        }
+        const entry = stack.pop();
+        let restored = 0;
+        for (const block of entry.blocks) {
+            try {
+                await this.request("/api/block/updateBlock", { dataType: "markdown", data: block.kramdown, id: block.id });
+                restored++;
+            } catch (error) {
+                console.warn("Zotero citation undo failed", errorMessage(error));
+            }
+        }
+        showMessage(`已撤销「${entry.label}」，回滚 ${restored} 个块（还可撤销 ${stack.length} 步）`, 4000);
+    }
+
+    citationContextAnchor(event) {
+        const target = event?.target;
+        const node = target?.closest?.('[data-href*="zotero://select"], a[href*="zotero://select"]');
+        if (!node) return null;
+        const href = node.getAttribute("data-href") || node.getAttribute("href") || "";
+        if (!href || /[?&]bib=1\b/.test(href)) return null;
+        const keys = this.citationLinkKeys(href);
+        if (!keys.length) return null;
+        const blockNode = node.closest("[data-node-id]");
+        return {
+            href,
+            text: node.textContent || "",
+            keys,
+            form: this.citationLinkForm(href),
+            blockId: blockNode?.getAttribute("data-node-id") || "",
+            docId: "",
+            at: Date.now()
+        };
+    }
+
+    freshCitationAnchor() {
+        const anchor = this.citationContext;
+        if (!anchor || !anchor.keys.length) return null;
+        if (Date.now() - (anchor.at || 0) > 8000) return null;
+        return anchor;
+    }
+
+    async editCitationAt(anchor) {
+        const docId = anchor.docId || getActiveEditor()?.protyle?.block?.rootID;
+        if (!docId) throw new Error("请先打开文档。");
+        const { numbers } = await this.citationNumbers(docId);
+        const dialog = new Dialog({
+            title: this.t("editCitation"),
+            content: `<div class="b3-dialog__content siyuan-plugin-zotero-notes__dialog-body"><strong>当前引用</strong><div data-cite-current></div><div class="fn__hr"></div><input class="b3-text-field fn__block" data-cite-search placeholder="${this.t("search")}"><div data-cite-results></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-cite-apply>${this.t("save")}</button></div>`,
+            width: "min(620px, calc(100vw - 24px))"
+        });
+        this.prepareDialog(dialog);
+        const current = dialog.element.querySelector("[data-cite-current]");
+        const results = dialog.element.querySelector("[data-cite-results]");
+        const search = dialog.element.querySelector("[data-cite-search]");
+        const selected = new Set(anchor.keys);
+        const renderCurrent = () => {
+            current.replaceChildren();
+            for (const key of selected) {
+                const item = this.library.items.find((candidate) => candidate.key === key);
+                const row = element("label", "siyuan-plugin-zotero-notes__citation-choice");
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.checked = true;
+                checkbox.addEventListener("change", () => {
+                    if (checkbox.checked) selected.add(key);
+                    else selected.delete(key);
+                });
+                row.append(checkbox, element("span", "", item ? `${itemTitle(item)} (${itemYear(item)})` : `${key}（${this.t("citationMissingItem")}）`));
+                current.append(row);
+            }
+            if (!selected.size) current.append(element("p", "siyuan-plugin-zotero-notes__empty", this.t("noCitationFound")));
+        };
+        const renderResults = () => {
+            const query = search.value.trim().toLocaleLowerCase();
+            results.replaceChildren();
+            for (const item of this.library.items.filter((candidate) => !query || this.matches(candidate, query)).slice(0, 60)) {
+                const row = element("label", "siyuan-plugin-zotero-notes__citation-choice");
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.checked = selected.has(item.key);
+                checkbox.addEventListener("change", () => {
+                    if (checkbox.checked) selected.add(item.key);
+                    else selected.delete(item.key);
+                    renderCurrent();
+                });
+                row.append(checkbox, element("span", "", `${itemTitle(item)} (${itemYear(item)})`));
+                results.append(row);
+            }
+        };
+        search.addEventListener("input", renderResults);
+        renderCurrent();
+        renderResults();
+        dialog.element.querySelector("[data-cite-apply]").addEventListener("click", () => {
+            dialog.destroy();
+            this.enqueue(async () => {
+                const keys = [...selected];
+                if (!keys.length) {
+                    await this.patchCitationAt(anchor, () => ({ remove: true }));
+                } else {
+                    const label = this.citationLabel(keys, anchor.form, numbers) || anchor.text;
+                    await this.patchCitationAt(anchor, () => ({ keys, text: label, form: anchor.form }));
+                }
+                await this.refreshDocumentCitations(docId);
+            });
+        });
+    }
+
+    async setCitationFormAt(anchor, form) {
+        const docId = anchor.docId || getActiveEditor()?.protyle?.block?.rootID;
+        if (!docId) throw new Error("请先打开文档。");
+        const { numbers } = await this.citationNumbers(docId);
+        const label = this.citationLabel(anchor.keys, form, numbers);
+        if (!label) throw new Error(this.t("noCitationFound"));
+        await this.patchCitationAt(anchor, () => ({ keys: anchor.keys, text: label, form }));
+    }
+
+    async locateCitationInBibliography(anchor) {
+        const docId = anchor.docId || getActiveEditor()?.protyle?.block?.rootID;
+        if (!docId) throw new Error("请先打开文档。");
+        const rows = await this.request("/api/query/sql", {
+            stmt: `SELECT a.block_id FROM attributes a JOIN blocks b ON a.block_id = b.id WHERE a.name = '${ATTR_BIB}' AND b.root_id = '${docId}' LIMIT 1`
+        });
+        const blockId = rows?.[0]?.block_id;
+        if (!blockId) {
+            showMessage("本文档还没有文末文献表，插入引用或执行「刷新本篇引用」后即可定位。", 5000);
+            return;
+        }
+        this.focusBlock(blockId);
+        showMessage(`已定位到文末文献表（${anchor.keys.length} 条引用）`, 3000);
+    }
+
+    focusBlock(blockId) {
+        const node = document.querySelector(`[data-node-id="${blockId}"]`);
+        if (!node) return false;
+        node.scrollIntoView({ block: "center" });
+        node.classList.add("siyuan-plugin-zotero-notes__flash");
+        setTimeout(() => node.classList.remove("siyuan-plugin-zotero-notes__flash"), 1900);
+        return true;
+    }
+
+    openCitationStyleDialog() {
+        const options = CITATION_STYLES.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
+        const dialog = new Dialog({
+            title: this.t("citationStyle"),
+            content: `<div class="b3-dialog__content"><select class="b3-select fn__block" data-cite-style>${options}</select></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-cite-style-apply>${this.t("save")}</button></div>`,
+            width: "420px"
+        });
+        this.prepareDialog(dialog);
+        const select = dialog.element.querySelector("[data-cite-style]");
+        select.value = this.settings.citationStyle;
+        dialog.element.querySelector("[data-cite-style-apply]").addEventListener("click", () => {
+            dialog.destroy();
+            this.enqueue(async () => {
+                await this.updateSettings({ citationStyle: select.value });
+                const docId = getActiveEditor()?.protyle?.block?.rootID;
+                if (docId) await this.refreshDocumentCitations(docId);
+                showMessage(`引用样式已切换为 ${select.options[select.selectedIndex].text}`, 3000);
+            });
+        });
+    }
+
+    /* ---------------- 环境自检 / 引导 / 文献库增强 ---------------- */
+
+    async openEnvironmentCheck() {
+        const dialog = new Dialog({
+            title: this.t("environmentCheck"),
+            content: `<div class="b3-dialog__content siyuan-plugin-zotero-notes__dialog-body" data-env-report><p class="siyuan-plugin-zotero-notes__meta">正在检查…</p></div>`,
+            width: "min(560px, calc(100vw - 24px))"
+        });
+        this.prepareDialog(dialog);
+        const report = dialog.element.querySelector("[data-env-report]");
+        const row = (label, ok, detail) => {
+            const node = element("div", "siyuan-plugin-zotero-notes__env-row");
+            node.append(element("strong", "", `${ok ? "✓" : "✗"} ${label}`));
+            node.append(element("span", "siyuan-plugin-zotero-notes__meta", detail || ""));
+            return node;
+        };
+        let zoteroOK = false;
+        let zoteroDetail = "";
+        try {
+            const result = await this.zoteroPage(`${USER_PREFIX}/items?limit=1`);
+            zoteroOK = !!result.serverID;
+            zoteroDetail = zoteroOK ? `文库 ID ${result.serverID}` : "未返回文库 ID";
+        } catch (error) {
+            zoteroDetail = errorMessage(error);
+        }
+        let pdfOK = false;
+        let pdfDetail = "";
+        const executable = cleanText(this.settings.pdf2zhPath) || "pdf2zh";
+        try {
+            const result = await this.defaultProcessRunner(executable, ["--help"], { signal: AbortSignal.timeout(15000) });
+            pdfOK = !result || result.code === 0;
+            pdfDetail = pdfOK ? "可执行" : `退出码 ${result?.code}`;
+        } catch (error) {
+            pdfDetail = errorMessage(error);
+        }
+        const secrets = Array.isArray(this.settings.translationSecretNames) ? this.settings.translationSecretNames : [];
+        report.replaceChildren(
+            row("Zotero 连接", zoteroOK, zoteroDetail),
+            row("pdf2zh 可执行文件", pdfOK, `${executable} · ${pdfDetail}`),
+            row("翻译密钥名称", secrets.length > 0, secrets.length ? secrets.join(", ") : "未配置（仅翻译时需要）"),
+            row("文库条目", true, `${this.library.items.length} 篇`),
+            row("论文文档绑定", Object.keys(this.bindings || {}).length > 0, `${Object.keys(this.bindings || {}).length} 篇`)
+        );
+    }
+
+    openOnboarding() {
+        const steps = [
+            {
+                title: "1 · 选择存放笔记本",
+                text: "在插件设置里选择论文笔记所在的笔记本。插件会在该笔记本下建立 Zotero 根文档，所有论文页都放在它下面。",
+                action: { label: "打开插件设置", run: () => this.openSetting() }
+            },
+            {
+                title: "2 · 刷新文库索引",
+                text: "在左侧 Zotero 文库面板点「刷新文库」，把 Zotero 条目读进思源。刷新只建立索引，不会批量创建文档。",
+                action: { label: "立即刷新文库", run: () => this.refreshLibrary(true) }
+            },
+            {
+                title: "3 · 创建论文笔记",
+                text: "在文库条目上点「新建笔记」，插件会创建论文页与可写的 Note 子文档；写完后可一键回传到 Zotero 子笔记。",
+                action: { label: "打开 Zotero 文库", run: () => this.focusDock() }
+            },
+            {
+                title: "4 · 插入引用",
+                text: "编辑器里输入 /zotero 回车即可插入引用；右键引用可编辑条目、切换形态与样式，或定位到文末文献表。",
+                action: { label: "插入一条引用", run: () => this.openCitationSelector() }
+            }
+        ];
+        let index = 0;
+        const dialog = new Dialog({
+            title: "Zotero 笔记使用引导",
+            content: `<div class="b3-dialog__content siyuan-plugin-zotero-notes__dialog-body" data-onboard-body></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-onboard-skip>跳过</button><button class="b3-button b3-button--text" data-onboard-prev>上一步</button><button class="b3-button b3-button--text" data-onboard-next>下一步</button></div>`,
+            width: "min(560px, calc(100vw - 24px))"
+        });
+        this.prepareDialog(dialog);
+        const body = dialog.element.querySelector("[data-onboard-body]");
+        const prev = dialog.element.querySelector("[data-onboard-prev]");
+        const next = dialog.element.querySelector("[data-onboard-next]");
+        const render = () => {
+            const step = steps[index];
+            body.replaceChildren();
+            body.append(element("h3", "", step.title), element("p", "", step.text));
+            const button = element("button", "b3-button b3-button--outline", step.action.label);
+            button.addEventListener("click", () => this.enqueue(() => step.action.run()));
+            body.append(button);
+            prev.disabled = index === 0;
+            next.textContent = index === steps.length - 1 ? "完成" : "下一步";
+        };
+        prev.addEventListener("click", () => {
+            index = Math.max(0, index - 1);
+            render();
+        });
+        next.addEventListener("click", () => {
+            if (index === steps.length - 1) {
+                dialog.destroy();
+                this.enqueue(() => this.updateSettings({ onboardingCompleted: true }));
+                return;
+            }
+            index = Math.min(steps.length - 1, index + 1);
+            render();
+        });
+        dialog.element.querySelector("[data-onboard-skip]").addEventListener("click", () => {
+            dialog.destroy();
+            this.enqueue(() => this.updateSettings({ onboardingCompleted: true }));
+        });
+        render();
+    }
+
+    async applyDefaultPaperTags(docId) {
+        const tags = String(this.settings.defaultPaperTags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+        if (!docId || !tags.length) return false;
+        const attrs = await this.request("/api/attr/getBlockAttrs", { id: docId });
+        const current = String(attrs?.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+        const merged = [...new Set([...current, ...tags])];
+        if (merged.length === current.length) return false;
+        await this.request("/api/attr/setBlockAttrs", { id: docId, attrs: { tags: merged.join(",") } });
+        return true;
+    }
+
+    async applyDefaultPaperTagsToAll() {
+        const errors = [];
+        let applied = 0;
+        for (const binding of Object.values(this.bindings || {})) {
+            if (!binding?.parentDocId) continue;
+            try {
+                if (await this.applyDefaultPaperTags(binding.parentDocId)) applied++;
+            } catch (error) {
+                errors.push(errorMessage(error));
+            }
+        }
+        return { applied, errors };
+    }
+
+    citeKeyFor(item) {
+        const data = item?.data || {};
+        const existing = cleanText(data.citationKey || data["citation-key"]);
+        if (existing) return existing;
+        const format = cleanText(this.settings.citeKeyFormat);
+        if (!format) return item?.key || "untitled";
+        const surname = this.citationAuthorNames(item)[0] || "anon";
+        const year = itemYear(item) || "nd";
+        const title = itemTitle(item).split(/\s+/)[0] || "untitled";
+        const key = format
+            .replace(/\{author\}/g, surname)
+            .replace(/\{year\}/g, year)
+            .replace(/\{title\}/g, title)
+            .replace(/[^\p{L}\p{N}_-]/gu, "")
+            .toLowerCase()
+            .slice(0, 64);
+        return key || item?.key || "untitled";
+    }
+
+    async mergeIntoZoteroItem(item, paper) {
+        const data = paper?.data || paper || {};
+        const payload = {};
+        const target = item?.data || {};
+        if (!cleanText(target.title) && cleanText(data.title)) payload.title = cleanText(data.title);
+        if (!cleanText(target.abstractNote) && cleanText(data.abstractNote || data.abstract)) payload.abstractNote = cleanText(data.abstractNote || data.abstract);
+        if (!cleanText(target.DOI) && cleanText(data.DOI || data.doi)) payload.DOI = cleanText(data.DOI || data.doi);
+        if (!cleanText(target.url) && cleanText(data.url)) payload.url = cleanText(data.url);
+        if (!cleanText(target.publicationTitle) && cleanText(data.publicationTitle)) payload.publicationTitle = cleanText(data.publicationTitle);
+        if (!itemYear(item) && cleanText(data.date)) payload.date = cleanText(data.date);
+        if (!(target.creators || []).length && Array.isArray(data.creators) && data.creators.length) payload.creators = data.creators;
+        if (!(target.tags || []).length && Array.isArray(data.tags) && data.tags.length) payload.tags = data.tags;
+        if (!Object.keys(payload).length) return false;
+        await this.zoteroRequest(`${USER_PREFIX}/items/${item.key}`, { method: "PATCH", body: payload });
+        return true;
+    }
+
+    updateTranslationStatusBar(summary) {
+        if (typeof document === "undefined") return;
+        const nodeId = "siyuan-plugin-zotero-notes-translation-status";
+        let node = document.getElementById(nodeId);
+        if (!summary || !summary.total) {
+            node?.remove();
+            return;
+        }
+        if (!node) {
+            node = element("div", "siyuan-plugin-zotero-notes__status-bar");
+            node.id = nodeId;
+            document.body.append(node);
+        }
+        node.textContent = `翻译：运行 ${summary.running} · 完成 ${summary.completed} · 失败 ${summary.failed} · 取消 ${summary.cancelled}`;
+        node.dataset.failed = String(summary.failed > 0);
+    }
+
     annotationMarkdown(annotations) {
         return annotations.map((annotation) => {
             const data = annotation.data || {};
@@ -2578,7 +3237,7 @@ class ZoteroNotesPlugin extends Plugin {
 
     bibEntry(item) {
         const data = item.data || {};
-        const key = cleanText(data.citationKey || data["citation-key"]) || item.key;
+        const key = this.citeKeyFor(item);
         const type = data.itemType === "book" ? "book" : data.itemType === "conferencePaper" ? "inproceedings" : data.itemType === "thesis" ? "thesis" : "article";
         const authors = (data.creators || []).map((creator) => cleanText(creator.name) || `${cleanText(creator.lastName)}, ${cleanText(creator.firstName)}`).filter(Boolean).join(" and ");
         const escape = (value) => cleanText(value).replace(/\\/g, "\\textbackslash ").replace(/([{}])/g, "\\$1");
@@ -2601,8 +3260,8 @@ class ZoteroNotesPlugin extends Plugin {
             const entries = await this.formatBibliography(keys, style);
             return entries.map((entry) => entry.text).join("\n\n");
         }
-        if (format === "typst") return items.map((item) => `#cite(<${item.data.citationKey || item.key}>)`).join("\n");
-        if (format === "latex") return items.map((item) => `\\cite{${item.data.citationKey || item.key}}`).join("\n");
+        if (format === "typst") return items.map((item) => `#cite(<${this.citeKeyFor(item)}>)`).join("\n");
+        if (format === "latex") return items.map((item) => `\\cite{${this.citeKeyFor(item)}}`).join("\n");
         return items.map((item) => this.bibEntry(item)).join("\n\n");
     }
 
@@ -2857,18 +3516,31 @@ class ZoteroNotesPlugin extends Plugin {
     async importPapers(papers, options = {}) {
         const action = options.duplicateAction || "skip";
         const candidates = [];
+        const merges = [];
         let skipped = 0;
         for (const paper of papers) {
-            const duplicate = this.library.items.some((item) => this.researchItemMatches(item, paper));
+            const duplicate = this.library.items.find((item) => this.researchItemMatches(item, paper));
             if (duplicate && action === "skip") {
                 skipped++;
                 continue;
             }
+            if (duplicate && action === "merge") {
+                merges.push({ item: duplicate, paper });
+                continue;
+            }
             candidates.push(paper);
+        }
+        let merged = 0;
+        for (const entry of merges) {
+            try {
+                if (await this.mergeIntoZoteroItem(entry.item, entry.paper)) merged++;
+            } catch (error) {
+                console.warn("Zotero merge failed", errorMessage(error));
+            }
         }
         const created = candidates.length ? await this.ensurePapers(candidates, { forceCreate: action === "create" }) : [];
         const errors = created.filter((result) => result.itemStatus === "error");
-        return { imported: created.length - errors.length, skipped, errors };
+        return { imported: created.length - errors.length, skipped, merged, errors };
     }
 
     async importFile(file, duplicateAction = "skip") {
@@ -2880,7 +3552,7 @@ class ZoteroNotesPlugin extends Plugin {
     openImportDialog() {
         const dialog = new Dialog({
             title: "导入文献 / Import papers",
-            content: `<div class="b3-dialog__content"><input type="file" class="b3-text-field fn__block" data-import-file accept=".json,.bib,.bibtex"><select class="b3-select fn__block" data-import-duplicate><option value="skip">重复条目：跳过</option><option value="create">重复条目：仍创建副本</option></select><div data-import-result></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-import-confirm>导入</button></div>`,
+            content: `<div class="b3-dialog__content"><input type="file" class="b3-text-field fn__block" data-import-file accept=".json,.bib,.bibtex"><select class="b3-select fn__block" data-import-duplicate><option value="skip">重复条目：跳过</option><option value="merge">重复条目：合并（只补空字段）</option><option value="create">重复条目：仍创建副本</option></select><div data-import-result></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-import-confirm>导入</button></div>`,
             width: "520px"
         });
         this.prepareDialog(dialog);
@@ -2895,7 +3567,7 @@ class ZoteroNotesPlugin extends Plugin {
             }
             this.enqueue(async () => {
                 const outcome = await this.importFile(file, action.value);
-                result.textContent = `已导入 ${outcome.imported} 篇，跳过重复 ${outcome.skipped} 篇${outcome.errors.length ? `，失败 ${outcome.errors.length} 条` : ""}`;
+                result.textContent = `已导入 ${outcome.imported} 篇，跳过重复 ${outcome.skipped} 篇${outcome.merged ? `，合并 ${outcome.merged} 篇` : ""}${outcome.errors.length ? `，失败 ${outcome.errors.length} 条` : ""}`;
             });
         });
     }
@@ -3092,7 +3764,7 @@ class ZoteroNotesPlugin extends Plugin {
     openAdvancedImportDialog() {
         const dialog = new Dialog({
             title: "检索 / PDF 导入",
-            content: `<div class="b3-dialog__content"><input class="b3-text-field fn__block" data-advanced-identifier placeholder="DOI、arXiv、ISBN、PMID/PMCID、URL"><input type="file" class="b3-text-field fn__block" data-advanced-pdf accept="application/pdf,.pdf"><select class="b3-select fn__block" data-advanced-duplicate><option value="skip">重复条目：跳过</option><option value="create">重复条目：仍创建副本</option></select><button class="b3-button b3-button--outline" data-advanced-fetch>检索 / 解析</button><input class="b3-text-field fn__block" data-advanced-title placeholder="识别标题（可编辑）"><div data-advanced-preview></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-advanced-import>确认导入</button></div>`,
+            content: `<div class="b3-dialog__content"><input class="b3-text-field fn__block" data-advanced-identifier placeholder="DOI、arXiv、ISBN、PMID/PMCID、URL"><input type="file" class="b3-text-field fn__block" data-advanced-pdf accept="application/pdf,.pdf"><select class="b3-select fn__block" data-advanced-duplicate><option value="skip">重复条目：跳过</option><option value="merge">重复条目：合并（只补空字段）</option><option value="create">重复条目：仍创建副本</option></select><button class="b3-button b3-button--outline" data-advanced-fetch>检索 / 解析</button><input class="b3-text-field fn__block" data-advanced-title placeholder="识别标题（可编辑）"><div data-advanced-preview></div></div><div class="b3-dialog__action"><button class="b3-button b3-button--text" data-advanced-import>确认导入</button></div>`,
             width: "600px"
         });
         this.prepareDialog(dialog);
@@ -3395,6 +4067,7 @@ class ZoteroNotesPlugin extends Plugin {
         const failed = values.filter((job) => job.status === "error").length;
         const cancelled = values.filter((job) => job.status === "cancelled").length;
         this.renderStatus(`翻译：运行 ${running}，完成 ${completed}，失败 ${failed}，取消 ${cancelled}`);
+        this.updateTranslationStatusBar({ running, completed, failed, cancelled, total: values.length });
     }
 
     openTranslationDialog(item) {

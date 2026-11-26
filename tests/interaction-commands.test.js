@@ -104,11 +104,24 @@ test("document tree menu supports recovery state and unload unsubscribes exact h
 });
 
 
+test("citation right-click menu exposes the citation actions", async () => {
+    const { plugin } = setupInteraction();
+    plugin.request = async () => ({});
+    plugin.citationContext = { keys: ["PAPER001"], form: "numeric", blockId: "block1", docId: "doc1", at: Date.now() };
+    const target = menu();
+    await plugin.documentMenuHandlers["open-menu-content"]({ detail: { protyle: { block: { rootID: "doc1" } }, menu: target } });
+    const labels = target.items.map((item) => item.label);
+    assert.ok(labels.some((label) => label.startsWith("编辑此引用")));
+    assert.ok(labels.includes("引用形态"));
+    assert.ok(labels.includes("定位到文末条目"));
+    assert.ok(labels.includes("刷新本篇引用"));
+});
+
 test("all command palette keys have bilingual labels", () => {
     const fs = require("node:fs");
     const zh = JSON.parse(fs.readFileSync("i18n/zh_CN.json", "utf8"));
     const en = JSON.parse(fs.readFileSync("i18n/en.json", "utf8"));
-    const keys = ["openNotePicker", "openZoteroDock", "syncConnectedCitations", "importPapers", "advancedImport", "checkZoteroConnection", "openZoteroSettings"];
+    const keys = ["openNotePicker", "openZoteroDock", "syncConnectedCitations", "importPapers", "advancedImport", "checkZoteroConnection", "environmentCheck", "replayOnboarding", "undoCitation", "openZoteroSettings"];
     for (const key of keys) {
         assert.ok(zh[key], `missing zh ${key}`);
         assert.ok(en[key], `missing en ${key}`);

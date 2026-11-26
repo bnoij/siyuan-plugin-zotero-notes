@@ -78,5 +78,16 @@
   "importPapers": "Import papers",
   "advancedImport": "Retrieve or import PDF",
   "checkZoteroConnection": "Check Zotero connection",
-  "openZoteroSettings": "Open Zotero Notes settings"
+  "openZoteroSettings": "Open Zotero Notes settings",
+  "bibliographyHeading": "References",
+  "undoCitation": "Undo the last citation operation",
+  "editCitation": "Edit this citation",
+  "citationForm": "Citation form",
+  "citationStyle": "Citation style",
+  "locateCitation": "Locate in the bibliography",
+  "refreshCitations": "Refresh citations in this document",
+  "environmentCheck": "Environment check",
+  "replayOnboarding": "Replay the getting started guide",
+  "noCitationFound": "No citation found",
+  "citationMissingItem": "This item is no longer in the Zotero library"
 }
