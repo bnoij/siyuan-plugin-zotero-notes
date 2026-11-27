@@ -1527,7 +1527,8 @@ class ZoteroNotesPlugin extends Plugin {
     }
 
     enqueue(operation) {
-        this.operationQueue = this.operationQueue.then(operation).catch((error) => {
+        const previous = this.operationQueue || Promise.resolve();
+        this.operationQueue = previous.then(operation).catch((error) => {
             if (error.name !== "AbortError") showMessage(`${this.t("operationFailed")}: ${errorMessage(error)}`, 8000);
         });
         return this.operationQueue;
