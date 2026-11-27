@@ -879,13 +879,24 @@ class ZoteroNotesPlugin extends Plugin {
     }
 
     withExclusiveLock(name, operation) {
-        if (globalThis.navigator?.locks?.request) {
-            return globalThis.navigator.locks.request(name, {
-                mode: "exclusive",
-                signal: this.abortController.signal
-            }, operation);
-        }
-        return operation();
+        const run = () => {
+            if (globalThis.navigator?.locks?.request) {
+                return globalThis.navigator.locks.request(name, {
+                    mode: "exclusive",
+                    signal: this.abortController.signal
+                }, operation);
+            }
+            return operation();
+        };
+        return this.withLocalLock(name, run);
+    }
+
+    withLocalLock(name, operation) {
+        if (!this.localLocks) this.localLocks = new Map();
+        const previous = this.localLocks.get(name) || Promise.resolve();
+        const run = previous.then(() => operation(), () => operation());
+        this.localLocks.set(name, run.then(() => undefined, () => undefined));
+        return run;
     }
 
     withOperationLock(itemKey, operation) {
@@ -4031,8 +4042,7 @@ class ZoteroNotesPlugin extends Plugin {
         while (this.translationActive > 0 || this.translationQueue.length) {
             if (Date.now() >= deadline) throw new Error("等待翻译队列结束超时 / Translation queue wait timeout");
             await new Promise((resolve) => {
-                const timer = setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now())));
-                timer.unref?.();
+                setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now())));
             });
         }
     }
