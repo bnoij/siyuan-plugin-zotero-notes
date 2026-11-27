@@ -100,7 +100,7 @@ The top-bar plugin menu opens the multi-item citation selector and export dialog
 - Settings are grouped into Basic, Sync, Writing, Translation, and Advanced. Switching tabs does not save. Translation now exposes per-document request concurrency.
 - The Dock keeps one primary action and moves secondary operations into **More**. Settings and dialogs use scrolling content, persistent actions, and single-column fields in narrow containers.
 
-Version 0.5.2 adds two stability fixes: the document-creation lock falls back to an in-process mutex where Web Locks are unavailable, so recovering the same Note concurrently creates it only once; and the translation queue wait no longer uses an `unref` timer, so the timeout path settles reliably.
+Version 0.6.1 adds three stability fixes: the document-creation lock falls back to an in-process mutex where Web Locks are unavailable, so recovering the same Note concurrently creates it once; the translation queue wait no longer uses an `unref` timer, so the timeout path settles reliably; and the operation queue is initialized lazily, so saving a settings draft before startup finishes no longer throws.
 
 ## Synchronization and conversion
 
